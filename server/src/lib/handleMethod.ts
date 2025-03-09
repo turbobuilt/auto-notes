@@ -106,7 +106,8 @@ export async function handleMethod(req, res) {
             }
             
             // Find user by auth token (implementation would depend on your auth system)
-            [user] = await db.query`select "user".* from "user" join authtoken on "user".id = authtoken.data->>'user' where authtoken.data->>'authToken' = ${authToken}`;
+            [user] = await db.query`select "entity".* from "entity"
+            where kind='User' AND id = (SELECT entity.data->>'user' FROM entity WHERE entity.data->>'authToken' = ${authToken} and entity.kind = 'AuthToken')`;
             if (!user) {
                 res.status(401).json({ error: "Invalid authentication token" });
                 return;

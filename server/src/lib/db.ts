@@ -2,7 +2,6 @@ import moment from "moment"
 import { Pool, PoolClient } from 'pg'
 import crypto from 'crypto'
 import base58 from 'bs58'
-import { tbl } from "migrations"
 
 interface Condition {
   field: string
@@ -16,9 +15,12 @@ interface Conditions {
   or?: (Condition[] | Conditions | Conditions[])
 }
 
-export function sanitizeTable(tbl: string): string {
+// Single table name for all entities
+const ENTITY_TABLE = 'entity';
+
+export function sanitizeTable(table: string): string {
     // Double-quote the table name to prevent SQL injection and handle special characters
-    return `"${tbl.replace(/"/g, '""').toLowerCase()}"`
+    return `"${table.replace(/"/g, '""')}"`
 }
 
 class Db {
@@ -38,34 +40,36 @@ class Db {
         return await this.pool.connect()
     }
 
+    private getEntityKind(table: string | Function): string {
+        if (typeof table === 'string') {
+            return table;
+        } else {
+            // If a class is provided, get the table name from the class name
+            return table.name;
+        }
+    }
+
     async find<T = any>(
         table: string | (new (...args: any[]) => T),
         conditions: Conditions
     ): Promise<T[]> {
-        let tableName: string;
+        const kind = this.getEntityKind(table);
         
-        if (typeof table === 'string') {
-            tableName = table;
-        } else {
-            // If a class is provided, get the table name from the class name
-            tableName = tbl(table.name);
-        }
-        
-        let query = `SELECT id, data FROM ${sanitizeTable(tableName)}`
-        const params: any[] = []
+        let query = `SELECT id, kind, data FROM ${sanitizeTable(ENTITY_TABLE)} WHERE kind = ?`
+        const params: any[] = [kind]
         
         if (conditions && Object.keys(conditions).length > 0) {
             const whereClause = this.buildWhereClause(conditions, params)
-            query += ` WHERE ${whereClause}`
+            query += ` AND ${whereClause}`
         }
         
         const result = await this.queryParameters(query, params)
         
         if (typeof table === 'string') {
-            return result.rows.map(row => this.extractData(row));
+            return result.map(row => this.extractData(row));
         } else {
             // If a class constructor was provided, instantiate objects of that class
-            return result.rows.map(row => {
+            return result.map(row => {
                 const data = this.extractData(row);
                 const instance = new (table as new (...args: any[]) => T)();
                 return Object.assign(instance, data);
@@ -164,7 +168,7 @@ class Db {
     }
 
     async insert(item: any): Promise<any> {
-        let table = tbl(item.constructor.name);
+        const kind = item.constructor.name;
         // Ensure created and updated timestamps
         if (!item.created) {
             item.created = Date.now()
@@ -181,18 +185,20 @@ class Db {
         const data = { ...item }
         delete data.id
         
-        const query = `INSERT INTO ${sanitizeTable(table)} (id, data) VALUES (?, ?)
-                      RETURNING id, data`
-        const params = [id, JSON.stringify(data)]
+        const query = `INSERT INTO ${sanitizeTable(ENTITY_TABLE)} (id, kind, data) VALUES (?, ?, ?)
+                      RETURNING id, kind, data`
+        const params = [id, kind, JSON.stringify(data)]
         
         const result = await this.queryParameters(query, params)
-        return this.extractData(result.rows[0])
+        return this.extractData(result[0])
     }
 
     async update(table: string, item: any): Promise<any> {
         if (!item.id) {
             throw new Error('Item must have an id to update')
         }
+        
+        const kind = this.getEntityKind(table);
         
         // Update timestamp
         item.updated = Date.now()
@@ -202,20 +208,23 @@ class Db {
         const data = { ...item }
         delete data.id
         
-        const query = `UPDATE ${sanitizeTable(table)} SET data = ? WHERE id = ? RETURNING id, data`
-        const params = [JSON.stringify(data), id]
+        const query = `UPDATE ${sanitizeTable(ENTITY_TABLE)} SET data = ? 
+                      WHERE id = ? AND kind = ? RETURNING id, kind, data`
+        const params = [JSON.stringify(data), id, kind]
         
         const result = await this.queryParameters(query, params)
         if (result.rowCount === 0) {
-            throw new Error(`Item with id ${id} not found`)
+            throw new Error(`Item with id ${id} and kind ${kind} not found`)
         }
         
         return this.extractData(result.rows[0])
     }
 
     async delete(table: string, id: string): Promise<boolean> {
-        const query = `DELETE FROM ${sanitizeTable(table)} WHERE id = ?`
-        const result = await this.queryParameters(query, [id])
+        const kind = this.getEntityKind(table);
+        
+        const query = `DELETE FROM ${sanitizeTable(ENTITY_TABLE)} WHERE id = ? AND kind = ?`
+        const result = await this.queryParameters(query, [id, kind])
         
         return result.rowCount > 0
     }
@@ -233,6 +242,7 @@ class Db {
         let paramIndex = 0
         query = query.replace(/\?/g, () => `$${++paramIndex}`)
         
+        console.log('Query:', query, 'Parameters:', parameters)
         let result = await this.pool.query(query, parameters);
         return result.rows;
     }
@@ -241,8 +251,9 @@ class Db {
         // Replace ? with $1, $2, etc.
         let paramIndex = 0
         const formattedQuery = query.replace(/\?/g, () => `$${++paramIndex}`)
-        console.log(formattedQuery, parameters)
-        return this.pool.query(formattedQuery, parameters)
+        console.log('Query:', formattedQuery, 'Parameters:', parameters)
+        let result = await this.pool.query(formattedQuery, parameters)
+        return result.rows;
     }
 
     extractData(data: any): any {

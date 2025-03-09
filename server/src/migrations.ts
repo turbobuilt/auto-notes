@@ -1,11 +1,7 @@
 import { db } from "lib/db";
 
 export const migrations = [
-    makeTable('User'),
-    makeTable('ResetPasswordToken'),
-    makeTable('AuthToken'),
-    makeTable('Client'),
-    makeTable('Session'),
+    makeTable('Entity'),
 ]
 
 
@@ -15,7 +11,7 @@ export function tbl(table) {
 
 function makeTable(name) {
     // id string primary key, data jsonb
-    return `CREATE TABLE "${tbl(name)}" (id VARCHAR PRIMARY KEY, data JSONB)`
+    return `CREATE TABLE "${tbl(name)}" (id VARCHAR PRIMARY KEY, kind varchar, data JSONB)`
 }
 // Create migrations table if it doesn't exist and run pending migrations
 export async function runMigrations(client: typeof db) {
@@ -32,11 +28,13 @@ export async function runMigrations(client: typeof db) {
     const result = await client.queryParameters(`
         SELECT MAX(index) as max_index FROM migrations
     `);
-    
-    const lastExecutedIndex = result.rows[0].max_index || -1;
+    const lastExecutedIndex = result[0].max_index ?? -1;
+
+    console.log(`Last executed migration index: ${lastExecutedIndex}`);
     
     // Execute migrations that haven't been run yet
     for (let i = lastExecutedIndex + 1; i < migrations.length; i++) {
+        console.log(`Executing migration ${i}...`);
         try {
             // Begin transaction
             await client.queryParameters('BEGIN');
