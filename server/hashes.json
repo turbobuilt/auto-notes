@@ -1,0 +1,16 @@
+{
+    "/src/methods/user/authToken.model.ts": "2d4a72097b486b11fb8f040e1fe493d74daca7f3657c10ccfdfc38740d786309",
+    "/src/methods/user/createAccount.ts": "58f9ffce2711f0b356e7ee6feddf840b6be1b0f88860627fcf7fc32553fa4300",
+    "/src/methods/user/login.ts": "0a9a24d38dc1f87b777fe412b7fe50f7a850253ff60e8e3568778f87702ef031",
+    "/src/methods/user/requestPasswordReset.ts": "772b3f01c9d2dbb4ae1d980872852c6cbc258f99299a87c512b59a91027e5fd9",
+    "/src/methods/user/resetPassword.ts": "fa8d72bc1d92fc570233e7aa4aaeaa9942c469481d64b6729e6e035e15c90084",
+    "/src/methods/user/user.model.ts": "582a3fd984b3d9a2747284be8df52e47cc2c0d06892fd59ae22d572b2572d49b",
+    "/src/methods/user/util.ts": "42685c827b8a1256cf0fef6d44616f9709c0360dccee56bbc87efb6e35da446f",
+    "/src/methods/user/me.ts": "3750747cea466dc025b2de40dcf64ea06eb7d246e6f104e21def3af10241685e",
+    "/src/methods/audio/transcribe.ts": "6df928e750702a2319c35ffab04b72c1adf515588bcfe2279dd87da81269fe71",
+    "/src/methods/summarize/createNote.ts": "c7d90a37d50eeba92e7c53674845fe57dbee4bdb78bbeafbf747950c55441c77",
+    "/src/methods/session/transcribe.ts": "6df928e750702a2319c35ffab04b72c1adf515588bcfe2279dd87da81269fe71",
+    "/Users/me/prj/autotherapynotes/client/src/serverTypes/session/index.ts": "7e837baa1d1086cd6b806376b5e281459584d30b5a99103b43e04e6196abc74a",
+    "/src/methods/session/summarize.ts": "6df928e750702a2319c35ffab04b72c1adf515588bcfe2279dd87da81269fe71",
+    "/src/methods/session/session.model.ts": "ad37b50047c8e0d1e8cc1fe7afc64c637a7b7621440efe35040b1831ffbe5196"
+}
