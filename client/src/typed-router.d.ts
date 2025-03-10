@@ -19,8 +19,12 @@ declare module 'vue-router/auto-routes' {
    */
   export interface RouteNamedMap {
     '/': RouteRecordInfo<'/', '/', Record<never, never>, Record<never, never>>,
-    '/app/dashboard/': RouteRecordInfo<'/app/dashboard/', '/app/dashboard', Record<never, never>, Record<never, never>>,
+    '/app/': RouteRecordInfo<'/app/', '/app', Record<never, never>, Record<never, never>>,
+    '/app/dashboard/index-old': RouteRecordInfo<'/app/dashboard/index-old', '/app/dashboard/index-old', Record<never, never>, Record<never, never>>,
     '/app/login': RouteRecordInfo<'/app/login', '/app/login', Record<never, never>, Record<never, never>>,
     '/app/register': RouteRecordInfo<'/app/register', '/app/register', Record<never, never>, Record<never, never>>,
+    '/app/session/[id]': RouteRecordInfo<'/app/session/[id]', '/app/session/:id', { id: ParamValue<true> }, { id: ParamValue<false> }>,
+    '/app/video-call/': RouteRecordInfo<'/app/video-call/', '/app/video-call', Record<never, never>, Record<never, never>>,
+    '/app/video-call/[id]': RouteRecordInfo<'/app/video-call/[id]', '/app/video-call/:id', { id: ParamValue<true> }, { id: ParamValue<false> }>,
   }
 }

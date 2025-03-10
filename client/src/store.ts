@@ -2,8 +2,14 @@ import type { User } from "./serverTypes/user/user.model";
 
 
 function makeStore() {
+    let userString = localStorage.getItem('user');
+    var user = null as User;
+    if (userString) {
+        user = JSON.parse(userString);
+    }
+
     return reactive({
-        user: null as User,
+        user: user,
         authToken: localStorage.getItem('authToken'),
         tokenExpires: localStorage.getItem('tokenExpires'),
     })   

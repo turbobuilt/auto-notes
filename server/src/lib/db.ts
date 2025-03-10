@@ -83,7 +83,11 @@ class Db {
             const clauses: string[] = []
             for (const field in conditions) {
                 params.push(conditions[field])
-                clauses.push(`data->>'${field}' = ?`)
+                if (field === 'id') {
+                    clauses.push(`id = ?`)
+                } else {
+                    clauses.push(`data->>'${field}' = ?`)
+                }
             }
             return clauses.join(' AND ')
         }
@@ -129,6 +133,46 @@ class Db {
         const { field, operator, value } = condition
         params.push(value)
         
+        // Special handling for id field
+        if (field === 'id') {
+            switch(operator) {
+                case '=':
+                    return `id = ?`;
+                case '>':
+                    return `id > ?`;
+                case '<':
+                    return `id < ?`;
+                case '>=':
+                    return `id >= ?`;
+                case '<=':
+                    return `id <= ?`;
+                case '!=':
+                    return `id != ?`;
+                case 'like':
+                    return `id LIKE ?`;
+                case 'contains':
+                    params[params.length - 1] = `%${value}%`;
+                    return `id LIKE ?`;
+                case 'starts_with':
+                    params[params.length - 1] = `${value}%`;
+                    return `id LIKE ?`;
+                case 'ends_with':
+                    params[params.length - 1] = `%${value}`;
+                    return `id LIKE ?`;
+                case 'in':
+                    if (Array.isArray(value)) {
+                        const placeholders = value.map(() => '?').join(',');
+                        params.pop();
+                        params.push(...value);
+                        return `id IN (${placeholders})`;
+                    }
+                    return `1=0`; // Impossible condition if value is not an array
+                default:
+                    return `id = ?`; // Default to equals
+            }
+        }
+        
+        // Original handling for data fields
         switch(operator) {
             case '=':
                 return `data->>'${field}' = ?`;
@@ -156,7 +200,6 @@ class Db {
             case 'in':
                 if (Array.isArray(value)) {
                     const placeholders = value.map(() => '?').join(',');
-                    // Remove the last param and add all array values
                     params.pop();
                     params.push(...value);
                     return `data->>'${field}' IN (${placeholders})`;
@@ -193,7 +236,8 @@ class Db {
         return this.extractData(result[0])
     }
 
-    async update(table: string, item: any): Promise<any> {
+    async update(item: any): Promise<any> {
+        let table = item.constructor.name;
         if (!item.id) {
             throw new Error('Item must have an id to update')
         }
@@ -217,7 +261,7 @@ class Db {
             throw new Error(`Item with id ${id} and kind ${kind} not found`)
         }
         
-        return this.extractData(result.rows[0])
+        return this.extractData(result[0])
     }
 
     async delete(table: string, id: string): Promise<boolean> {

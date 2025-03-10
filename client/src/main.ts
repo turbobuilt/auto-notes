@@ -14,7 +14,6 @@ async function main() {
 
     app.use(router)
     addConfig(app);
-
     app.mount('#app')
     await router.isReady();
     console.log("storeis", store)
@@ -24,11 +23,8 @@ async function main() {
     }
     let mePromise = serverMethods.user.me();
     let me = await mePromise;
-    console.log(me)
     if (me.error) {
         router.push('/app/login');
-    } else {
-        router.push('/app/dashboard');
     }
 }
 

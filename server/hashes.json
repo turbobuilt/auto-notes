@@ -12,5 +12,9 @@
     "/src/methods/session/transcribe.ts": "6df928e750702a2319c35ffab04b72c1adf515588bcfe2279dd87da81269fe71",
     "/Users/me/prj/autotherapynotes/client/src/serverTypes/session/index.ts": "7e837baa1d1086cd6b806376b5e281459584d30b5a99103b43e04e6196abc74a",
     "/src/methods/session/summarize.ts": "6df928e750702a2319c35ffab04b72c1adf515588bcfe2279dd87da81269fe71",
-    "/src/methods/session/session.model.ts": "ad37b50047c8e0d1e8cc1fe7afc64c637a7b7621440efe35040b1831ffbe5196"
+    "/src/methods/session/session.model.ts": "ad37b50047c8e0d1e8cc1fe7afc64c637a7b7621440efe35040b1831ffbe5196",
+    "/src/methods/videoCall/create.ts": "81ac65d5c05be88a0ba612c140e9dccd16fc8fef841d2fa8459cb8699f045820",
+    "/src/methods/videoCall/VideoCall.model.ts": "7ab907a8240b59faa3ff95f04068ff5ae6c3d1f3f13b5897902b4d0c282eaaf4",
+    "/src/methods/videoCall/get.ts": "87deca8371bff19614b36e41e0257540d08347b84e833164f9c6b958b2331a47",
+    "/src/methods/videoCall/message.ts": "616f23acfcfeba312f3cd41841da1ce3d6bf1fed9b85daabea78a001503a92f8"
 }
