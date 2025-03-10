@@ -19,16 +19,50 @@ export class VideoCallSignaling {
   }
   
   // Initialize signaling and WebRTC
-  async initialize(localConnectionId: string): Promise<WebRTCService> {
+  async initialize(localConnectionId: string, maxRetries = 3, skipMedia = false): Promise<WebRTCService> {
     try {
-      // Get local media stream
-      await this.webrtcService.getLocalStream();
+      if (!skipMedia) {
+        // Try to get media access with permission checking
+        try {
+          // First check if we have permissions
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const hasVideoPermission = devices.some(device => 
+            device.kind === 'videoinput' && device.label !== '');
+          const hasAudioPermission = devices.some(device => 
+            device.kind === 'audioinput' && device.label !== '');
+          
+          // If we already have permissions, proceed with getLocalStream
+          if (hasVideoPermission && hasAudioPermission) {
+            await this.webrtcService.getLocalStream();
+          } else {
+            // Otherwise, explicitly request permissions first
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+              video: true, 
+              audio: true 
+            });
+            
+            // Manually pass the stream to WebRTC service
+            await this.webrtcService.setLocalStream(stream);
+          }
+        } catch (streamError) {
+          console.error('Media access error:', streamError);
+          // Continue without local media
+          // Add to event log
+          this.state.events.push({
+            type: 'warning',
+            data: `Media access denied: ${streamError.message || streamError}`,
+            time: new Date()
+          });
+        }
+      }
       
       // Set up connections with other participants if they exist
       if (this.state.videoCall && this.state.videoCall.connections) {
-        // Filter out our own connection ID
+        // Filter out our own connection ID and any null connections
         const otherConnections = this.state.videoCall.connections
-          .filter(connId => connId !== localConnectionId);
+          .filter(connId => connId !== localConnectionId && connId !== null && connId !== undefined);
+        
+        console.log("Setting up connections with participants:", otherConnections);
         
         // Create peer connections for each participant
         for (const connId of otherConnections) {
@@ -51,32 +85,48 @@ export class VideoCallSignaling {
       try {
         if (!this.state.videoCall) return;
         
-        const { type, connectionId, sdp, candidate } = data;
+        console.log("Received signaling message:", data);
+        const { type, event, connectionId, senderConnectionId, sdp, candidate } = data;
+        
+        // Use senderConnectionId if available (more reliable)
+        const remoteConnectionId = senderConnectionId || connectionId;
         
         switch (type) {
           case 'offer':
-            await this.webrtcService.handleOffer(connectionId, sdp);
+            if (remoteConnectionId) {
+              console.log("Handling offer from:", remoteConnectionId);
+              await this.webrtcService.handleOffer(remoteConnectionId, sdp);
+            }
             break;
             
           case 'answer':
-            await this.webrtcService.handleAnswer(connectionId, sdp);
+            if (remoteConnectionId) {
+              console.log("Handling answer from:", remoteConnectionId);
+              await this.webrtcService.handleAnswer(remoteConnectionId, sdp);
+            }
             break;
             
           case 'ice-candidate':
-            await this.webrtcService.handleIceCandidate(connectionId, candidate);
+            if (remoteConnectionId) {
+              console.log("Handling ICE candidate from:", remoteConnectionId);
+              await this.webrtcService.handleIceCandidate(remoteConnectionId, candidate);
+            }
             break;
-            
-          case 'new-participant':
-            // New participant joined, create a connection as initiator
-            await this.webrtcService.createPeerConnection(connectionId, true);
-            break;
-            
-          case 'participant-left':
-            this.webrtcService.closeConnection(connectionId);
-            break;
-            
-          default:
-            console.warn('Unknown signal type:', type);
+        }
+        
+        // Special event types
+        if (event === 'new-participant') {
+          const peerId = senderConnectionId || connectionId;
+          if (peerId) {
+            console.log("New participant joined:", peerId);
+            await this.webrtcService.createPeerConnection(peerId, true);
+          }
+        } else if (event === 'participant-left') {
+          const peerId = senderConnectionId || connectionId;
+          if (peerId) {
+            console.log("Participant left:", peerId);
+            this.webrtcService.closeConnection(peerId);
+          }
         }
         
         // Add to events log
@@ -89,6 +139,16 @@ export class VideoCallSignaling {
         console.error('Error handling signal:', error);
       }
     });
+    
+    // Also listen for participant events
+    this.wsService.on('videoCallParticipant', (data: any) => {
+      console.log("Participant event:", data);
+      this.state.events.push({
+        type: 'participant',
+        data,
+        time: new Date()
+      });
+    });
   }
   
   // Send signaling message through WebSocket
@@ -98,7 +158,11 @@ export class VideoCallSignaling {
       return;
     }
     
+    // Add sender connection ID to help with routing
+    signal.senderConnectionId = this.state.connectionId;
+    
     try {
+      console.log("Sending signal:", signal);
       await sendVideoCallMessage(
         this.wsService,
         this.state.wsConnected,
@@ -115,5 +179,34 @@ export class VideoCallSignaling {
   // Clean up and close connections
   cleanup(): void {
     this.webrtcService.closeAllConnections();
+  }
+  
+  // Check if media permissions are already granted
+  static async checkMediaPermissions(): Promise<{video: boolean, audio: boolean}> {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasVideoPermission = devices.some(device => 
+        device.kind === 'videoinput' && device.label !== '');
+      const hasAudioPermission = devices.some(device => 
+        device.kind === 'audioinput' && device.label !== '');
+        
+      return { video: hasVideoPermission, audio: hasAudioPermission };
+    } catch (error) {
+      console.error('Error checking media permissions:', error);
+      return { video: false, audio: false };
+    }
+  }
+  
+  // Request media permissions explicitly
+  static async requestMediaPermissions(): Promise<MediaStream | null> {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: true 
+      });
+    } catch (error) {
+      console.error('Error requesting media permissions:', error);
+      return null;
+    }
   }
 }

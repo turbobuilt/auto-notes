@@ -36,12 +36,12 @@ const loadSessions = async () => {
 
 // Navigate to session page
 const goToSession = (session) => {
-  router.push(`/app/dashboard/session/${session.id}`);
+  router.push(`/app//session/${session.id}`);
 };
 
 // Start a new recording session
 const startNewSession = () => {
-  router.push('/app/dashboard/session/new');
+  router.push('/app//session/new');
 };
 
 // Search functionality
@@ -129,7 +129,7 @@ const highlightTerm = (text, term) => {
 
 // Handle clicking a search result
 const selectSearchResult = (sessionId) => {
-  router.push(`/app/dashboard/session/${sessionId}`);
+  router.push(`/app//session/${sessionId}`);
 };
 
 // Toggle debug info

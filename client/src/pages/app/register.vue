@@ -24,7 +24,7 @@ async function register() {
   if (await checkAndShowHttpError(result))
     return;
   setUser(result.data.user, result.data.authToken, result.data.expires);
-  router.push('/app/dashboard');
+  router.push('/app/');
 }
 </script>
 <template>

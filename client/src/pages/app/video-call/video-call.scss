@@ -1,0 +1,224 @@
+.video-call-container {
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.loading {
+    text-align: center;
+    padding: 20px;
+    font-size: 1.2em;
+}
+
+.call-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.connection-status {
+    padding: 5px 10px;
+    border-radius: 4px;
+    background-color: #f44336;
+    color: white;
+    font-weight: bold;
+}
+
+.connection-status.connected {
+    background-color: #4caf50;
+}
+
+.share-link {
+    margin-bottom: 20px;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+}
+
+.link-container {
+    display: flex;
+}
+
+.link-container input {
+    flex: 1;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px 0 0 4px;
+    outline: none;
+}
+
+.link-container button {
+    padding: 8px 16px;
+    background-color: #4285f4;
+    color: white;
+    border: none;
+    border-radius: 0 4px 4px 0;
+    cursor: pointer;
+}
+
+.video-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.video-item {
+    position: relative;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: #000;
+    aspect-ratio: 16 / 9;
+}
+
+.video-item video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.video-label {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    padding: 5px 10px;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: white;
+    border-radius: 4px;
+}
+
+.video-controls {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.video-controls button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    background-color: #4285f4;
+    color: white;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.video-controls button:hover {
+    background-color: #3367d6;
+}
+
+.video-controls .control-disabled {
+    background-color: #f44336;
+}
+
+.video-controls .control-disabled:hover {
+    background-color: #d32f2f;
+}
+
+.video-controls .control-active {
+    background-color: #fb8c00;
+}
+
+.video-controls .control-active:hover {
+    background-color: #f57c00;
+}
+
+.connection-info {
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+}
+
+.connection-info ul {
+    list-style: none;
+    padding: 0;
+    margin: 10px 0 0;
+}
+
+.connection-info li {
+    padding: 5px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.connection-info .connected-badge {
+    margin-left: 5px;
+    padding: 2px 6px;
+    background-color: #4caf50;
+    color: white;
+    border-radius: 10px;
+    font-size: 0.8em;
+}
+
+.connection-info .success-message {
+    color: #4caf50;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+.events-log {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.event-item {
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.event-time {
+    font-size: 0.8em;
+    color: #666;
+    margin-right: 10px;
+}
+
+.event-type {
+    font-weight: bold;
+    color: #4285f4;
+    margin-right: 10px;
+}
+
+.event-data {
+    margin-top: 5px;
+    padding: 8px;
+    background-color: #eee;
+    border-radius: 4px;
+    font-size: 0.9em;
+    white-space: pre-wrap;
+    overflow-x: auto;
+}
+
+@media (max-width: 768px) {
+    .video-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .video-controls {
+        flex-wrap: wrap;
+    }
+    
+    .video-controls button {
+        flex: 1;
+        min-width: 100px;
+    }
+    
+    .link-container {
+        flex-direction: column;
+    }
+    
+    .link-container input {
+        border-radius: 4px 4px 0 0;
+    }
+    
+    .link-container button {
+        border-radius: 0 0 4px 4px;
+    }
+}

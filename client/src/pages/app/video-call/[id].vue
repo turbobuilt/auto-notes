@@ -4,12 +4,15 @@ import router from '@/router'
 import { serverMethods } from '@/serverMethods';
 import type { VideoCall } from '@/serverTypes/videoCall/VideoCall.model';
 import { store } from '@/store';
-import { onMounted, ref, reactive, computed, onUnmounted } from 'vue'
+import { onMounted, ref, reactive, computed, onUnmounted, watch } from 'vue'
 import { initVideoCallWebSocket, sendVideoCallMessage } from '@/lib/videoCallWebSocket';
 import { VideoCallSignaling } from '@/lib/videoCallSignaling';
 import { WebRTCService } from '@/lib/webrtcService';
 
 console.log(store.user)
+// Create a non-reactive reference for WebRTCService
+let rtcService: WebRTCService | null = null;
+
 const d = reactive({
     videoCall: null as VideoCall,
     loading: true,
@@ -17,10 +20,10 @@ const d = reactive({
     wsService: null,
     wsConnected: false,
     events: [] as Array<{type: string, data: any, time: Date}>,
-    rtcService: null as WebRTCService | null,
     signaling: null as VideoCallSignaling | null,
     localStream: null as MediaStream | null,
     remoteStreams: [] as MediaStream[],
+    remoteConnectionIds: [] as string[],
     isVideoEnabled: true,
     isAudioEnabled: true,
     isScreenSharing: false,
@@ -29,10 +32,37 @@ const d = reactive({
     isMobile: window.innerWidth <= 768
 })
 
+// Create reactive refs specifically for those values that need to be reactive
+const localStream = ref<MediaStream | null>(null);
+const remoteStreams = ref<{id: string, stream: MediaStream}[]>([]);
+
 const videoContainerRef = ref<HTMLDivElement | null>(null);
 const localVideoRef = ref<HTMLVideoElement | null>(null);
 const shareUrl = computed(() => window.location.href);
 const routeId = computed(() => (router.currentRoute.value?.params as any).id);
+
+// Handle new remote stream
+const handleRemoteStreamAdded = (connectionId: string, stream: MediaStream) => {
+    console.log(`Remote stream added from ${connectionId}`, stream);
+    
+    // Check if we already have this stream
+    const existingIndex = remoteStreams.value.findIndex(s => s.id === connectionId);
+    
+    if (existingIndex >= 0) {
+        // Update existing stream
+        remoteStreams.value[existingIndex].stream = stream;
+    } else {
+        // Add new stream
+        remoteStreams.value.push({ id: connectionId, stream });
+    }
+    
+    // Update the d object for reactive purposes
+    d.remoteStreams = remoteStreams.value.map(s => s.stream);
+    d.remoteConnectionIds = remoteStreams.value.map(s => s.id);
+    
+    // Update video elements
+    updateRemoteVideos();
+}
 
 onMounted(async () => {
     await router.isReady();
@@ -40,7 +70,7 @@ onMounted(async () => {
         await createVideoCall();
         router.replace({ params: { id: d.videoCall.id } });
     } else {
-        let result = await serverMethods.videoCall.get(routeId.value, d.connectionId);
+        let result = await serverMethods.videoCall.get(routeId.value);
         if (await checkAndShowHttpError(result))
             return;
         d.videoCall = result.data.videoCall;
@@ -60,31 +90,38 @@ onMounted(async () => {
             await sendMessage('join', { connectionId: d.connectionId });
             
             // Initialize WebRTC and signaling
-            d.rtcService = await d.signaling.initialize(d.connectionId);
+            rtcService = await d.signaling.initialize(d.connectionId);
             
-            // Save local stream reference
-            d.localStream = d.rtcService.getLocalMediaStream();
-            
-            // Set the local video element's srcObject
-            if (localVideoRef.value && d.localStream) {
-                localVideoRef.value.srcObject = d.localStream;
+            // Set remote stream handler
+            if (rtcService) {
+                rtcService.setOnRemoteStreamAdded(handleRemoteStreamAdded);
             }
             
-            // Watch for new remote streams
-            setInterval(() => {
-                if (d.rtcService) {
-                    const connections = d.rtcService.getConnections();
-                    const newStreams = connections.map(conn => conn.remoteStream);
-                    
-                    // Only update if there's a change
-                    if (JSON.stringify(d.remoteStreams) !== JSON.stringify(newStreams)) {
-                        d.remoteStreams = newStreams;
-                        
-                        // Update remote videos in next tick
-                        setTimeout(updateRemoteVideos, 0);
+            // Save local stream reference
+            localStream.value = rtcService.getLocalMediaStream();
+            d.localStream = localStream.value;
+            
+            // Set the local video element's srcObject
+            if (localVideoRef.value && localStream.value) {
+                localVideoRef.value.srcObject = localStream.value;
+            }
+            
+            // Set up polling to check for new connections (backup for missing events)
+            const connectionPoller = setInterval(() => {
+                if (!rtcService) {
+                    clearInterval(connectionPoller);
+                    return;
+                }
+                
+                const connections = rtcService.getConnectionsWithRemoteStreams();
+                for (const conn of connections) {
+                    // Add any missing streams
+                    if (conn.remoteStream && 
+                        !remoteStreams.value.some(s => s.id === conn.connectionId)) {
+                        handleRemoteStreamAdded(conn.connectionId, conn.remoteStream);
                     }
                 }
-            }, 1000);
+            }, 2000);
         } catch (error) {
             console.error('Error setting up WebRTC:', error);
             d.events.push({
@@ -117,40 +154,58 @@ onUnmounted(() => {
     if (d.isScreenSharing && d.originalStream) {
         stopScreenSharing();
     }
+
+    // Perform cleanup on the non-reactive rtcService
+    if (rtcService) {
+        rtcService.closeAllConnections();
+        rtcService = null;
+    }
+    
+    // Clean up video elements
+    cleanupVideoElements();
 })
+
+function cleanupVideoElements() {
+    if (!videoContainerRef.value) return;
+    
+    // Remove all remote video elements
+    const remoteVideos = videoContainerRef.value.querySelectorAll('.video-item:not(.local-video-container)');
+    remoteVideos.forEach(el => el.remove());
+}
 
 function updateRemoteVideos() {
     if (!videoContainerRef.value) return;
     
-    // Find all remote video elements
-    const remoteVideos = videoContainerRef.value.querySelectorAll('.remote-video');
+    // Clean up any stale video elements
+    cleanupVideoElements();
     
-    // For each remote stream, find or create a video element
-    d.remoteStreams.forEach((stream, index) => {
-        let videoEl: HTMLVideoElement;
+    // Create video elements for each remote stream
+    remoteStreams.value.forEach((streamData, index) => {
+        const { id, stream } = streamData;
         
-        if (index < remoteVideos.length) {
-            // Use existing video element
-            videoEl = remoteVideos[index] as HTMLVideoElement;
-        } else {
-            // Create a new video element
-            videoEl = document.createElement('video');
-            videoEl.classList.add('remote-video');
-            videoEl.autoplay = true;
-            videoEl.playsInline = true;
-            videoContainerRef.value!.appendChild(videoEl);
-        }
+        // Create container div
+        const containerDiv = document.createElement('div');
+        containerDiv.className = 'video-item';
+        containerDiv.dataset.connectionId = id;
         
-        // Set the stream if it's different
-        if (videoEl.srcObject !== stream) {
-            videoEl.srcObject = stream;
-        }
+        // Create video element
+        const videoEl = document.createElement('video');
+        videoEl.autoplay = true;
+        videoEl.playsInline = true;
+        videoEl.srcObject = stream;
+        
+        // Create label
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'video-label';
+        labelDiv.textContent = `Participant ${index + 1}`;
+        
+        // Add elements to container
+        containerDiv.appendChild(videoEl);
+        containerDiv.appendChild(labelDiv);
+        
+        // Add to grid
+        videoContainerRef.value!.appendChild(containerDiv);
     });
-    
-    // Remove excess video elements
-    for (let i = d.remoteStreams.length; i < remoteVideos.length; i++) {
-        remoteVideos[i].remove();
-    }
 }
 
 async function createVideoCall() {
@@ -175,26 +230,26 @@ async function sendMessage(type: string, data: any) {
 // Toggle audio
 function toggleAudio() {
     d.isAudioEnabled = !d.isAudioEnabled;
-    if (d.rtcService) {
-        d.rtcService.toggleAudio(d.isAudioEnabled);
+    if (rtcService) {
+        rtcService.toggleAudio(d.isAudioEnabled);
     }
 }
 
 // Toggle video
 function toggleVideo() {
     d.isVideoEnabled = !d.isVideoEnabled;
-    if (d.rtcService) {
-        d.rtcService.toggleVideo(d.isVideoEnabled);
+    if (rtcService) {
+        rtcService.toggleVideo(d.isVideoEnabled);
     }
 }
 
 // Start screen sharing
 async function startScreenSharing() {
     try {
-        if (!d.rtcService) return;
+        if (!rtcService) return;
         
         // Save original stream for later
-        d.originalStream = d.localStream;
+        d.originalStream = localStream.value;
         
         // Get screen share stream
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
@@ -202,6 +257,7 @@ async function startScreenSharing() {
         });
         
         // Update local stream reference
+        localStream.value = screenStream;
         d.localStream = screenStream;
         
         // Update local video
@@ -211,7 +267,7 @@ async function startScreenSharing() {
         
         // Replace tracks in all peer connections
         const videoTrack = screenStream.getVideoTracks()[0];
-        const connections = d.rtcService.getConnections();
+        const connections = rtcService.getConnections();
         
         for (const conn of connections) {
             const senders = conn.connection.getSenders();
@@ -235,23 +291,24 @@ async function startScreenSharing() {
 // Stop screen sharing
 async function stopScreenSharing() {
     try {
-        if (!d.rtcService || !d.originalStream || !d.localStream) return;
+        if (!rtcService || !d.originalStream || !localStream.value) return;
         
         // Stop all tracks in screen sharing stream
-        d.localStream.getTracks().forEach(track => track.stop());
+        localStream.value.getTracks().forEach(track => track.stop());
         
         // Restore original stream
+        localStream.value = d.originalStream;
         d.localStream = d.originalStream;
         d.originalStream = null;
         
         // Update local video
         if (localVideoRef.value) {
-            localVideoRef.value.srcObject = d.localStream;
+            localVideoRef.value.srcObject = localStream.value;
         }
         
         // Replace tracks in all peer connections
-        const videoTrack = d.localStream.getVideoTracks()[0];
-        const connections = d.rtcService.getConnections();
+        const videoTrack = localStream.value.getVideoTracks()[0];
+        const connections = rtcService.getConnections();
         
         for (const conn of connections) {
             const senders = conn.connection.getSenders();
@@ -281,7 +338,7 @@ function copyInviteLink() {
 </script>
 <template>
     <div class="video-call-container">
-        <div v-if="d.loading" class="loading">Loading...</div>
+        <div v-if="d.loading || !d.videoCall" class="loading">Loading...</div>
         <div v-else>
             <div class="call-info">
                 <h2>Video Call: {{ d.videoCall.id }}</h2>
@@ -329,12 +386,16 @@ function copyInviteLink() {
             </div>
             
             <div class="connection-info">
-                <h3>Participants ({{ d.videoCall.connections ? d.videoCall.connections.length : 0 }})</h3>
+                <h3>Participants ({{ d.videoCall.connections ? d.videoCall.connections.filter(c => c !== null).length : 0 }})</h3>
                 <ul>
-                    <li v-for="(conn, index) in d.videoCall.connections" :key="index">
+                    <li v-for="(conn, index) in d.videoCall.connections.filter(c => c !== null)" :key="index">
                         {{ conn === d.connectionId ? conn + ' (You)' : conn }}
+                        <span v-if="d.remoteConnectionIds.includes(conn)" class="connected-badge">Connected</span>
                     </li>
                 </ul>
+                <p v-if="d.remoteStreams.length > 0" class="success-message">
+                    {{ d.remoteStreams.length }} remote stream(s) connected
+                </p>
             </div>
             
             <div class="events-log">
@@ -349,214 +410,4 @@ function copyInviteLink() {
     </div>
 </template>
 
-<style scoped>
-.video-call-container {
-    padding: 20px;
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
-.loading {
-    text-align: center;
-    padding: 20px;
-    font-size: 1.2em;
-}
-
-.call-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-}
-
-.connection-status {
-    padding: 5px 10px;
-    border-radius: 4px;
-    background-color: #f44336;
-    color: white;
-    font-weight: bold;
-}
-
-.connection-status.connected {
-    background-color: #4caf50;
-}
-
-.share-link {
-    margin-bottom: 20px;
-    padding: 10px;
-    background-color: #f8f9fa;
-    border-radius: 8px;
-}
-
-.link-container {
-    display: flex;
-}
-
-.link-container input {
-    flex: 1;
-    padding: 8px;
-    border: 1px solid #ddd;
-    border-radius: 4px 0 0 4px;
-    outline: none;
-}
-
-.link-container button {
-    padding: 8px 16px;
-    background-color: #4285f4;
-    color: white;
-    border: none;
-    border-radius: 0 4px 4px 0;
-    cursor: pointer;
-}
-
-.video-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 20px;
-    margin-bottom: 20px;
-}
-
-.video-item {
-    position: relative;
-    border-radius: 8px;
-    overflow: hidden;
-    background-color: #000;
-    aspect-ratio: 16 / 9;
-}
-
-.video-item video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.video-label {
-    position: absolute;
-    bottom: 10px;
-    left: 10px;
-    padding: 5px 10px;
-    background-color: rgba(0, 0, 0, 0.6);
-    color: white;
-    border-radius: 4px;
-}
-
-.video-controls {
-    display: flex;
-    justify-content: center;
-    gap: 15px;
-    margin-bottom: 20px;
-}
-
-.video-controls button {
-    padding: 10px 20px;
-    border: none;
-    border-radius: 5px;
-    background-color: #4285f4;
-    color: white;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.video-controls button:hover {
-    background-color: #3367d6;
-}
-
-.video-controls .control-disabled {
-    background-color: #f44336;
-}
-
-.video-controls .control-disabled:hover {
-    background-color: #d32f2f;
-}
-
-.video-controls .control-active {
-    background-color: #fb8c00;
-}
-
-.video-controls .control-active:hover {
-    background-color: #f57c00;
-}
-
-.connection-info {
-    margin-bottom: 20px;
-    padding: 15px;
-    background-color: #f8f9fa;
-    border-radius: 8px;
-}
-
-.connection-info ul {
-    list-style: none;
-    padding: 0;
-    margin: 10px 0 0;
-}
-
-.connection-info li {
-    padding: 5px 0;
-    border-bottom: 1px solid #eee;
-}
-
-.events-log {
-    margin-top: 20px;
-    padding: 15px;
-    background-color: #f8f9fa;
-    border-radius: 8px;
-    max-height: 300px;
-    overflow-y: auto;
-}
-
-.event-item {
-    margin-bottom: 10px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid #eee;
-}
-
-.event-time {
-    font-size: 0.8em;
-    color: #666;
-    margin-right: 10px;
-}
-
-.event-type {
-    font-weight: bold;
-    color: #4285f4;
-    margin-right: 10px;
-}
-
-.event-data {
-    margin-top: 5px;
-    padding: 8px;
-    background-color: #eee;
-    border-radius: 4px;
-    font-size: 0.9em;
-    white-space: pre-wrap;
-    overflow-x: auto;
-}
-
-@media (max-width: 768px) {
-    .video-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .video-controls {
-        flex-wrap: wrap;
-    }
-    
-    .video-controls button {
-        flex: 1;
-        min-width: 100px;
-    }
-    
-    .link-container {
-        flex-direction: column;
-    }
-    
-    .link-container input {
-        border-radius: 4px 4px 0 0;
-    }
-    
-    .link-container button {
-        border-radius: 0 0 4px 4px;
-    }
-}
-</style>
+<style scoped src="./video-call.scss"></style>

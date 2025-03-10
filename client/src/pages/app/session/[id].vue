@@ -235,7 +235,7 @@ const finishRecordingAndProcess = async (audioBlob, duration) => {
         });
 
         // Update the route to the new session ID
-        router.replace(`/app/dashboard/session/${sessionId}`);
+        router.replace(`/app//session/${sessionId}`);
 
         // Reload the session with new ID
         await loadSession(sessionId);
@@ -324,7 +324,7 @@ const deleteSession = async () => {
             await db.summaries.where('sessionId').equals(session.value.id).delete();
             await db.sessions.delete(session.value.id);
             showDeleteConfirm.value = false;
-            router.push('/app/dashboard');
+            router.push('/app/');
         } catch (err) {
             console.error("Error deleting session:", err);
             alert("Error deleting session: " + err.message);
@@ -376,7 +376,7 @@ const retryProcessing = async () => {
 
 // Go back to dashboard
 const goBackToDashboard = () => {
-    router.push('/app/dashboard');
+    router.push('/app/');
 };
 
 // Clean up blob URLs when the component is unmounted
