@@ -4,7 +4,6 @@ import { db } from "lib/db";
 import { broadcastToConnections } from "lib/wsServer";
 
 export default route(async function (params, body) {
-    console.log("body is", body);
     const { callId, type, data } = body;
 
     // Retrieve the video call
@@ -20,7 +19,7 @@ export default route(async function (params, body) {
     switch (type) {
         case 'signal':
             // For signaling, just forward the message to the intended recipient
-            handleSignalingMessage(videoCall, data);
+            await handleSignalingMessage(videoCall, data);
             break;
 
         case 'join':
@@ -35,17 +34,60 @@ export default route(async function (params, body) {
 
         default:
             // For other messages, just broadcast to all participants
-            broadcastToConnections(
+            const { invalid } = broadcastToConnections(
                 videoCall.connections,
                 { type: 'videoCall', id: videoCall.id, message: { type, data } }
             );
+            
+            // Remove any invalid connections
+            if (invalid.length > 0) {
+                await removeInvalidConnectionsFromCall(videoCall, invalid);
+            }
     }
 
     return { success: true };
-})
+}, { public: true })
+
+// Helper function to remove invalid connections from a VideoCall
+async function removeInvalidConnectionsFromCall(videoCall: VideoCall, invalidConnections: string[]) {
+    console.log("invalid connections", invalidConnections)
+    if (!invalidConnections.length) return;
+    
+    try {
+        // Use a single query to atomically update the connections array
+        await db.query`
+            UPDATE entity
+            SET data = jsonb_set(
+                data,
+                '{connections}',
+                (
+                    SELECT COALESCE(
+                        (
+                            SELECT jsonb_agg(conn)
+                            FROM jsonb_array_elements_text(data->'connections') AS conn
+                            WHERE NOT conn::text = ANY(${invalidConnections.map(c => JSON.stringify(c))})
+                        ),
+                        '[]'::jsonb
+                    )
+                )
+            )
+            WHERE kind = 'VideoCall'
+            AND id = ${videoCall.id}
+        `;
+        
+        // Update the in-memory object as well
+        videoCall.connections = videoCall.connections.filter(
+            conn => !invalidConnections.includes(conn)
+        );
+        
+        // console.log(`Removed ${invalidConnections.length} invalid connections from VideoCall ${videoCall.id}`);
+    } catch (error) {
+        console.error(`Error removing invalid connections from VideoCall ${videoCall.id}:`, error);
+    }
+}
 
 // Handle WebRTC signaling messages
-function handleSignalingMessage(videoCall: VideoCall, data: any) {
+async function handleSignalingMessage(videoCall: VideoCall, data: any) {
     // Extract the target connection ID from the data
     const { connectionId, targetConnectionId } = data;
     
@@ -56,21 +98,32 @@ function handleSignalingMessage(videoCall: VideoCall, data: any) {
     if (!targetId || targetId === null) {
         // Send to all other connections except the sender
         const otherConnections = videoCall.connections.filter(conn => conn !== data.senderConnectionId);
+        console.log("otherConnections", otherConnections)
         if (otherConnections.length > 0) {
-            broadcastToConnections(
+            const { invalid } = broadcastToConnections(
                 otherConnections,
                 { type: 'videoCallSignal', ...data }
             );
+            
+            // Remove any invalid connections
+            if (invalid.length > 0) {
+                await removeInvalidConnectionsFromCall(videoCall, invalid);
+            }
         }
         return;
     }
     
     // Send the signal only to the specified connection
     if (videoCall.connections.includes(targetId)) {
-        broadcastToConnections(
+        const { invalid } = broadcastToConnections(
             [targetId],
             { type: 'videoCallSignal', ...data }
         );
+        console.log("target id is", targetId);
+        // Remove invalid connection if needed
+        if (invalid.length > 0) {
+            await removeInvalidConnectionsFromCall(videoCall, invalid);
+        }
     }
 }
 
@@ -87,7 +140,7 @@ async function handleJoinMessage(videoCall: VideoCall, data: any) {
         await db.update(videoCall);
 
         // Notify all participants about the new connection
-        broadcastToConnections(
+        const { invalid } = broadcastToConnections(
             videoCall.connections,
             {
                 type: 'videoCallParticipant',
@@ -96,11 +149,17 @@ async function handleJoinMessage(videoCall: VideoCall, data: any) {
                 totalParticipants: videoCall.connections.length
             }
         );
+        console.log("broadcasting", "invalid", invalid, "all", videoCall.connections)
+        
+        // Remove any invalid connections
+        if (invalid.length > 0) {
+            await removeInvalidConnectionsFromCall(videoCall, invalid);
+        }
 
         // Send signal to existing participants that a new peer has joined
         for (const existingConn of videoCall.connections) {
             if (existingConn !== connectionId) {
-                broadcastToConnections(
+                const { invalid } = broadcastToConnections(
                     [existingConn],
                     {
                         type: 'videoCallSignal',
@@ -109,6 +168,11 @@ async function handleJoinMessage(videoCall: VideoCall, data: any) {
                         senderConnectionId: connectionId
                     }
                 );
+                
+                // Process any invalid connections
+                if (invalid.length > 0) {
+                    await removeInvalidConnectionsFromCall(videoCall, invalid);
+                }
             }
         }
     }
@@ -125,7 +189,7 @@ async function handleLeaveMessage(videoCall: VideoCall, data: any) {
         await db.update(videoCall);
 
         // Notify remaining participants
-        broadcastToConnections(
+        const { invalid } = broadcastToConnections(
             videoCall.connections,
             {
                 type: 'videoCallParticipant',
@@ -134,17 +198,27 @@ async function handleLeaveMessage(videoCall: VideoCall, data: any) {
                 totalParticipants: videoCall.connections.length
             }
         );
+        
+        // Remove any invalid connections
+        if (invalid.length > 0) {
+            await removeInvalidConnectionsFromCall(videoCall, invalid);
+        }
 
         // Signal to all remaining participants that someone left
         for (const remainingConn of videoCall.connections) {
-            broadcastToConnections(
+            const { invalid } = broadcastToConnections(
                 [remainingConn],
                 {
                     type: 'videoCallSignal',
-                    type: 'participant-left',
+                    event: 'participant-left',
                     connectionId
                 }
             );
+            
+            // Process any invalid connections
+            if (invalid.length > 0) {
+                await removeInvalidConnectionsFromCall(videoCall, invalid);
+            }
         }
     }
 }

@@ -199,16 +199,24 @@ export function broadcastToConnection(connectionId: string, data: any): boolean 
 }
 
 // Broadcast to multiple connections
-export function broadcastToConnections(connectionIds: string[], data: any): string[] {
+export function broadcastToConnections(connectionIds: string[], data: any): {
+    successful: string[];
+    invalid: string[];
+} {
     const successful: string[] = [];
+    const invalid: string[] = [];
     
     for (const id of connectionIds) {
-        if (broadcastToConnection(id, data)) {
+        const conn = activeWebSocketConnections.get(id);
+        if (conn && conn.ws.readyState === WebSocket.OPEN) {
+            conn.ws.send(JSON.stringify(data));
             successful.push(id);
+        } else {
+            invalid.push(id);
         }
     }
     
-    return successful;
+    return { successful, invalid };
 }
 
 // Broadcast to all connections for a user

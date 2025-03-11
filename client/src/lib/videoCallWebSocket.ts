@@ -1,106 +1,85 @@
 import { getWebSocketService } from './websocketService';
-import type { VideoCall } from '@/serverTypes/videoCall/VideoCall.model';
+import type { WebSocketService } from './websocketService';
+import { serverMethods } from '../serverMethods';
 
+// Type for video call WebSocket state
 export interface VideoCallWebSocketState {
+  videoCall: any;
   wsConnected: boolean;
+  connectionId: string;
   events: Array<{type: string, data: any, time: Date}>;
-  videoCall: VideoCall | null;
 }
 
-export async function initVideoCallWebSocket(
-  connectionId: string,
-  state: VideoCallWebSocketState
-) {
-  console.log("starting websocket");
-  const wsService = getWebSocketService(connectionId);
-  
-  // Event handlers
-  wsService.on('connect', () => {
+// Initialize WebSocket connection for video call
+export async function initVideoCallWebSocket(connectionId: string, state: VideoCallWebSocketState) {
+  try {
+    // Get WebSocket service instance
+    const wsService = getWebSocketService(connectionId);
+    
+    // Connect to WebSocket server
+    await wsService.connect();
+    
+    // Set state as connected
     state.wsConnected = true;
-    state.events.push({
-      type: 'system',
-      data: 'WebSocket connected',
-      time: new Date()
-    });
-  });
-  
-  wsService.on('disconnect', () => {
-    state.wsConnected = false;
-    state.events.push({
-      type: 'system',
-      data: 'WebSocket disconnected',
-      time: new Date()
-    });
-  });
-  
-  wsService.on('videoCall', (data) => {
-    state.events.push({
-      type: 'videoCall',
-      data,
-      time: new Date()
+    
+    // Add event handlers
+    wsService.on('connect', () => {
+      state.wsConnected = true;
+      state.events.push({
+        type: 'connection',
+        data: { status: 'connected' },
+        time: new Date()
+      });
     });
     
-    // Update video call object if it's for the current call
-    if (state.videoCall && data.id === state.videoCall.id) {
-      Object.assign(state.videoCall, data);
-    }
-  });
-  
-  // Add specific handler for videoCallSignal events
-  wsService.on('videoCallSignal', (data) => {
-    state.events.push({
-      type: 'videoCallSignal',
-      data,
-      time: new Date()
+    wsService.on('disconnect', (data) => {
+      state.wsConnected = false;
+      state.events.push({
+        type: 'connection',
+        data: { status: 'disconnected', ...data },
+        time: new Date()
+      });
     });
-  });
-
-  // Add handler for participant join/leave
-  wsService.on('videoCallParticipant', (data) => {
-    state.events.push({
-      type: 'videoCallParticipant',
-      data,
-      time: new Date()
-    });
-  });
-
-  if (state.videoCall) {
-    let videoCallws = await wsService.callMethod('videoCall.get', state.videoCall.id);
-    console.log("videoCallws", videoCallws);
-  }
-  
-  // Connect to WebSocket server
-  try {
-    await wsService.connect();
+    
+    return wsService;
   } catch (error) {
-    console.error('Failed to connect to WebSocket:', error);
+    console.error('Error initializing video call WebSocket:', error);
+    throw error;
   }
-
-  return wsService;
 }
 
+// Function to join a video call
+export async function joinVideoCall(wsService: WebSocketService, videoCallId: string, connectionId: string) {
+  try {
+    // Join the call using WebSocket method call
+    const result = await wsService.callMethod('videoCall.join', videoCallId, connectionId);
+    return result;
+  } catch (error) {
+    console.error('Error joining video call:', error);
+    throw error;
+  }
+}
+
+// Send a message for a video call
 export async function sendVideoCallMessage(
-  wsService: any, 
+  wsService: WebSocketService, 
   wsConnected: boolean, 
   callId: string, 
   type: string, 
   data: any
 ) {
-  if (!wsService || !wsConnected) {
-    console.error('WebSocket not connected');
-    return;
+  if (!wsConnected) {
+    throw new Error('WebSocket not connected');
   }
   
   try {
-    const result = await wsService.callMethod('videoCall.message', {
+    return await wsService.callMethod('videoCall.message', {
       callId,
       type,
       data
     });
-    
-    return result;
   } catch (error) {
-    console.error('Error sending WebSocket message:', error);
+    console.error(`Error sending ${type} message:`, error);
     throw error;
   }
 }

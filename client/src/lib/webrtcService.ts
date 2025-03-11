@@ -4,6 +4,8 @@ export interface PeerConnection {
   connectionId: string;
   isInitiator: boolean;
   connected: boolean;
+  lastActivity: number; // Add timestamp for last activity
+  status: 'active' | 'stale' | 'dead'; // Add connection status
 }
 
 export class WebRTCService {
@@ -18,11 +20,24 @@ export class WebRTCService {
   };
   public onSignalNeededCallback: (signal: any) => void;
   public onRemoteStreamAddedCallback: ((connectionId: string, stream: MediaStream) => void) | null = null;
+  public onConnectionStatusChangedCallback: ((connectionId: string, status: 'active' | 'stale' | 'dead') => void) | null = null;
+  
+  private connectionMonitorInterval: number | null = null;
+  private readonly STALE_THRESHOLD_MS = 5000; // 5 seconds for stale
+  private readonly DEAD_THRESHOLD_MS = 15000; // 15 seconds for dead
 
   constructor(onSignalNeeded: (signal: any) => void) {
     this.onSignalNeededCallback = onSignalNeeded;
     this.localStream = null;
     console.log("WebRTCService initialized with localStream:", this.localStream);
+    
+    // Start connection monitor
+    this.startConnectionMonitor();
+  }
+
+  // Set callback for connection status changes
+  setOnConnectionStatusChanged(callback: (connectionId: string, status: 'active' | 'stale' | 'dead') => void): void {
+    this.onConnectionStatusChangedCallback = callback;
   }
 
   // Set callback for remote stream events
@@ -112,6 +127,9 @@ export class WebRTCService {
         remoteStream.addTrack(track);
       });
       
+      // Update last activity timestamp
+      this.updateConnectionActivity(connectionId);
+      
       // Notify via callback if available
       if (this.onRemoteStreamAddedCallback) {
         console.log(`Calling onRemoteStreamAdded for ${connectionId}`);
@@ -137,13 +155,40 @@ export class WebRTCService {
       const peer = this.peerConnections.get(connectionId);
       if (peer) {
         peer.connected = peerConnection.connectionState === 'connected';
+        
+        // Update last activity timestamp on connection state change
+        if (peer.connected) {
+          this.updateConnectionActivity(connectionId);
+        }
       }
     };
     
     // Handle ICE connection state
     peerConnection.oniceconnectionstatechange = () => {
       console.log(`ICE connection state for ${connectionId}: ${peerConnection.iceConnectionState}`);
+      
+      // Update activity on favorable ICE state changes
+      if (['connected', 'completed'].includes(peerConnection.iceConnectionState)) {
+        this.updateConnectionActivity(connectionId);
+      }
     };
+    
+    // Handle data channel for activity tracking
+    const dataChannel = peerConnection.createDataChannel('keepalive', { negotiated: true, id: 100 });
+    dataChannel.onmessage = () => {
+      this.updateConnectionActivity(connectionId);
+    };
+    
+    // Send keepalive ping every 2 seconds
+    setInterval(() => {
+      try {
+        if (dataChannel.readyState === 'open') {
+          dataChannel.send('ping');
+        }
+      } catch (err) {
+        console.warn(`Error sending keepalive to ${connectionId}:`, err);
+      }
+    }, 2000);
     
     // Create a new peer connection object
     const peer: PeerConnection = {
@@ -151,7 +196,9 @@ export class WebRTCService {
       remoteStream,
       connectionId,
       isInitiator,
-      connected: false
+      connected: false,
+      lastActivity: Date.now(),
+      status: 'active'
     };
     
     this.peerConnections.set(connectionId, peer);
@@ -167,6 +214,7 @@ export class WebRTCService {
   
   // Create and send an offer to a peer
   async createAndSendOffer(connectionId: string): Promise<void> {
+    console.log("Sending offer")
     const peer = this.peerConnections.get(connectionId);
     if (!peer) throw new Error(`No peer connection for ID: ${connectionId}`);
     
@@ -276,6 +324,8 @@ export class WebRTCService {
   
   // Clean up and close all connections
   closeAllConnections(): void {
+    this.stopConnectionMonitor();
+    
     this.peerConnections.forEach(peer => {
       peer.connection.close();
     });
@@ -304,5 +354,79 @@ export class WebRTCService {
     return Array.from(this.peerConnections.values()).filter(
       conn => conn.remoteStream && conn.remoteStream.getTracks().length > 0
     );
+  }
+
+  // Start monitoring connections
+  private startConnectionMonitor(): void {
+    // Clear any existing interval
+    if (this.connectionMonitorInterval !== null) {
+      window.clearInterval(this.connectionMonitorInterval);
+    }
+    
+    // Check connections every second
+    this.connectionMonitorInterval = window.setInterval(() => {
+      this.checkConnectionHealth();
+    }, 1000);
+  }
+  
+  // Stop monitoring connections
+  private stopConnectionMonitor(): void {
+    if (this.connectionMonitorInterval !== null) {
+      window.clearInterval(this.connectionMonitorInterval);
+      this.connectionMonitorInterval = null;
+    }
+  }
+  
+  // Update connection activity timestamp
+  updateConnectionActivity(connectionId: string): void {
+    const peer = this.peerConnections.get(connectionId);
+    if (peer) {
+      const previousStatus = peer.status;
+      
+      // Update timestamp
+      peer.lastActivity = Date.now();
+      
+      // If previously stale or dead, mark as active again
+      if (peer.status !== 'active') {
+        peer.status = 'active';
+        
+        // Notify about status change
+        if (this.onConnectionStatusChangedCallback && previousStatus !== 'active') {
+          this.onConnectionStatusChangedCallback(connectionId, 'active');
+        }
+        
+        console.log(`Connection ${connectionId} is now active again`);
+      }
+    }
+  }
+  
+  // Check health of all connections
+  private checkConnectionHealth(): void {
+    const now = Date.now();
+    
+    this.peerConnections.forEach((peer, connectionId) => {
+      const timeSinceActivity = now - peer.lastActivity;
+      
+      // Check for stale connections (5+ seconds without activity)
+      if (timeSinceActivity >= this.STALE_THRESHOLD_MS && peer.status === 'active') {
+        peer.status = 'stale';
+        console.log(`Connection ${connectionId} is stale (${timeSinceActivity}ms without activity)`);
+        
+        // Notify about status change
+        if (this.onConnectionStatusChangedCallback) {
+          this.onConnectionStatusChangedCallback(connectionId, 'stale');
+        }
+      }
+      // Check for dead connections (15+ seconds without activity)
+      else if (timeSinceActivity >= this.DEAD_THRESHOLD_MS && peer.status === 'stale') {
+        peer.status = 'dead';
+        console.log(`Connection ${connectionId} is dead (${timeSinceActivity}ms without activity)`);
+        
+        // Notify about status change
+        if (this.onConnectionStatusChangedCallback) {
+          this.onConnectionStatusChangedCallback(connectionId, 'dead');
+        }
+      }
+    });
   }
 }

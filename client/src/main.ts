@@ -17,8 +17,8 @@ async function main() {
     app.mount('#app')
     await router.isReady();
     console.log("storeis", store)
-    let unauthenticatedRoutes = new Set(['/app/login', '/app/register']);
-    if (unauthenticatedRoutes.has(router.currentRoute.value.path) || !router.currentRoute.value.path.startsWith('/app')) {
+    let unauthenticatedRoutes = new Set(['/app/login', '/app/register', '/app/video-call']);
+    if (unauthenticatedRoutes.has(router.currentRoute.value.path) || !router.currentRoute.value.path.startsWith('/app') || router.currentRoute.value.path.startsWith('/app/video-call')) {
         return;
     }
     let mePromise = serverMethods.user.me();

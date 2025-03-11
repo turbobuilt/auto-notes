@@ -286,7 +286,7 @@ class Db {
         let paramIndex = 0
         query = query.replace(/\?/g, () => `$${++paramIndex}`)
         
-        console.log('Query:', query, 'Parameters:', parameters)
+        // console.log('Query:', query, 'Parameters:', parameters)
         let result = await this.pool.query(query, parameters);
         return result.rows;
     }

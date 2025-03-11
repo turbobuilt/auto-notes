@@ -1,10 +1,11 @@
 import { WebRTCService } from './webrtcService';
 import { sendVideoCallMessage } from './videoCallWebSocket';
 import type { VideoCallWebSocketState } from './videoCallWebSocket';
+import type { WebSocketService } from './websocketService';
 
 export class VideoCallSignaling {
   private webrtcService: WebRTCService;
-  private wsService: any;
+  private wsService: WebSocketService;
   private state: VideoCallWebSocketState;
   
   constructor(wsService: any, state: VideoCallWebSocketState) {
@@ -80,69 +81,107 @@ export class VideoCallSignaling {
   
   // Set up handlers for signaling messages
   private setupSignalHandling(): void {
-    // Listen for signaling messages
-    this.wsService.on('videoCallSignal', async (data: any) => {
+    // Listen for specific signaling message types directly
+    const signalTypes = ['offer', 'answer', 'ice-candidate'];
+    
+    for (const type of signalTypes) {
+      this.wsService.on(type, async (data: any) => {
+        try {
+          if (!this.state.videoCall) return;
+          
+          console.log(`Received ${type} signaling message:`, data);
+          const { connectionId, senderConnectionId, sdp, candidate } = data;
+          
+          // Use senderConnectionId if available (more reliable)
+          const remoteConnectionId = senderConnectionId || connectionId;
+          
+          switch (type) {
+            case 'offer':
+              if (remoteConnectionId) {
+                console.log("Handling offer from:", remoteConnectionId);
+                await this.webrtcService.handleOffer(remoteConnectionId, sdp);
+              }
+              break;
+              
+            case 'answer':
+              if (remoteConnectionId) {
+                console.log("Handling answer from:", remoteConnectionId);
+                await this.webrtcService.handleAnswer(remoteConnectionId, sdp);
+              }
+              break;
+              
+            case 'ice-candidate':
+              if (remoteConnectionId) {
+                console.log("Handling ICE candidate from:", remoteConnectionId);
+                await this.webrtcService.handleIceCandidate(remoteConnectionId, candidate);
+              }
+              break;
+          }
+          
+          // Add to events log
+          this.state.events.push({
+            type: 'signal',
+            data,
+            time: new Date()
+          });
+        } catch (error) {
+          console.error(`Error handling ${type} signal:`, error);
+        }
+      });
+    }
+    
+    // Also listen for participant events (new-participant, participant-left)
+    this.wsService.on('new-participant', async (data: any) => {
       try {
-        if (!this.state.videoCall) return;
-        
-        console.log("Received signaling message:", data);
-        const { type, event, connectionId, senderConnectionId, sdp, candidate } = data;
-        
-        // Use senderConnectionId if available (more reliable)
-        const remoteConnectionId = senderConnectionId || connectionId;
-        
-        switch (type) {
-          case 'offer':
-            if (remoteConnectionId) {
-              console.log("Handling offer from:", remoteConnectionId);
-              await this.webrtcService.handleOffer(remoteConnectionId, sdp);
-            }
-            break;
-            
-          case 'answer':
-            if (remoteConnectionId) {
-              console.log("Handling answer from:", remoteConnectionId);
-              await this.webrtcService.handleAnswer(remoteConnectionId, sdp);
-            }
-            break;
-            
-          case 'ice-candidate':
-            if (remoteConnectionId) {
-              console.log("Handling ICE candidate from:", remoteConnectionId);
-              await this.webrtcService.handleIceCandidate(remoteConnectionId, candidate);
-            }
-            break;
+        const peerId = data.senderConnectionId || data.connectionId;
+        if (peerId) {
+          console.log("New participant joined:", peerId);
+          await this.webrtcService.createPeerConnection(peerId, true);
+          
+          // Add to events log
+          this.state.events.push({
+            type: 'participant',
+            data,
+            time: new Date()
+          });
         }
-        
-        // Special event types
-        if (event === 'new-participant') {
-          const peerId = senderConnectionId || connectionId;
-          if (peerId) {
-            console.log("New participant joined:", peerId);
-            await this.webrtcService.createPeerConnection(peerId, true);
-          }
-        } else if (event === 'participant-left') {
-          const peerId = senderConnectionId || connectionId;
-          if (peerId) {
-            console.log("Participant left:", peerId);
-            this.webrtcService.closeConnection(peerId);
-          }
-        }
-        
-        // Add to events log
-        this.state.events.push({
-          type: 'signal',
-          data,
-          time: new Date()
-        });
       } catch (error) {
-        console.error('Error handling signal:', error);
+        console.error('Error handling new participant:', error);
       }
     });
     
-    // Also listen for participant events
+    this.wsService.on('participant-left', async (data: any) => {
+      try {
+        const peerId = data.senderConnectionId || data.connectionId;
+        if (peerId) {
+          console.log("Participant left:", peerId);
+          this.webrtcService.closeConnection(peerId);
+          
+          // Add to events log
+          this.state.events.push({
+            type: 'participant',
+            data,
+            time: new Date()
+          });
+        }
+      } catch (error) {
+        console.error('Error handling participant left:', error);
+      }
+    });
+    
+    // Listen for general videoCallParticipant events as before
     this.wsService.on('videoCallParticipant', (data: any) => {
       console.log("Participant event:", data);
+      
+      // If a participant left, ensure we update our tracking
+      if (data.event === 'left' && data.connectionId) {
+        // Close the connection if it exists in webrtcService
+        const rtcConn = this.webrtcService.getConnection(data.connectionId);
+        if (rtcConn) {
+          this.webrtcService.closeConnection(data.connectionId);
+        }
+      }
+      
       this.state.events.push({
         type: 'participant',
         data,
