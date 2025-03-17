@@ -27,12 +27,22 @@ class Db {
     pool: Pool
 
     constructor() {
+        if (!process.env.db_host)
+            throw new Error('Missing environment variable db_host')
+        if (!process.env.db_port)
+            throw new Error('Missing environment variable db_port')
+        if (!process.env.db_user)
+            throw new Error('Missing environment variable db_user')
+        if (!process.env.db_password)
+            throw new Error('Missing environment variable db_password')
+        if (!process.env.db_name)
+            throw new Error('Missing environment variable db_name')
         this.pool = new Pool({
-            host: process.env.db_host || 'localhost',
-            port: parseInt(process.env.db_port || '5432'),
-            user: process.env.db_user || 'postgres',
-            password: process.env.db_password || 'postgres',
-            database: process.env.db_name || 'autotherapynotes',
+            host: process.env.db_host,
+            port: parseInt(process.env.db_port),
+            user: process.env.db_user,
+            password: process.env.db_password,
+            database: process.env.db_name,
         })
     }
 

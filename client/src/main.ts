@@ -8,6 +8,7 @@ import router from './router'
 import callMethod from './lib/callMethod'
 import { serverMethods } from './serverMethods'
 import { store } from './store'
+import { example } from './new_lib/example'
 
 async function main() {
     const app = createApp(App)
@@ -16,7 +17,6 @@ async function main() {
     addConfig(app);
     app.mount('#app')
     await router.isReady();
-    console.log("storeis", store)
     let unauthenticatedRoutes = new Set(['/app/login', '/app/register', '/app/video-call']);
     if (unauthenticatedRoutes.has(router.currentRoute.value.path) || !router.currentRoute.value.path.startsWith('/app') || router.currentRoute.value.path.startsWith('/app/video-call')) {
         return;

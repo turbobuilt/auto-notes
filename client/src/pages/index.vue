@@ -1,11 +1,19 @@
 <script lang="ts" setup>
 import WebsiteMenu from '../components/WebsiteMenu.vue';
 import WebsiteFooter from '../components/WebsiteFooter.vue';
+import { example } from "../new_lib/example";
+
+function work() {
+  console.log("bob")
+  example();
+}
 </script>
 
 <template>
   <div class="index-page">
     <WebsiteMenu />
+
+    <button @click="work">WORK</button>
 
     <!-- Hero Section -->
     <section class="hero">

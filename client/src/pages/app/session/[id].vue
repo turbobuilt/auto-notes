@@ -6,6 +6,8 @@ import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import AudioVisualizer from "@/components/AudioVisualizer.vue";
 import { recorderService } from "@/lib/recorderService";
 import { useRoute, useRouter } from 'vue-router';
+// Import the transcription utilities
+import { transcribeAudio } from '@/new_lib/index';
 
 const route = useRoute();
 const router = useRouter();
@@ -20,6 +22,11 @@ const clientName = ref('');
 const session = ref(null);
 const notFound = ref(false);
 const isProcessing = ref(false);
+// New variables for transcription state
+const isTranscribing = ref(false);
+const transcriptionProgress = ref(0);
+const currentTranscriptionText = ref('');
+const transcriptionChunks = ref([]);
 
 // Audio stream variable for passing to AudioVisualizer
 const audioStream = ref(null);
@@ -257,23 +264,56 @@ const processRecording = async (currentSession, audioBlob) => {
     try {
         loading.value = true;
         isProcessing.value = true;
+        isTranscribing.value = true;
+        transcriptionProgress.value = 0;
+        currentTranscriptionText.value = '';
+        transcriptionChunks.value = [];
 
         // Update session status
         await db.sessions.update(currentSession.id, { status: 'processing' });
         currentSession.status = 'processing';
 
-        // Transcribe audio
+        // Transcribe audio locally
+        loadingMessage.value = 'Transcribing audio locally...';
+        
+        // Convert blob to ArrayBuffer for transcription
+        const audioArrayBuffer = await blobToArrayBuffer(audioBlob);
+        
+        // Start the transcription process
+        const transcription = await transcribeAudio(audioArrayBuffer, {
+            onProgress: (progress) => {
+                transcriptionProgress.value = progress.progress;
+                loadingMessage.value = `Loading transcription model: ${Math.round(progress.progress * 100)}%`;
+            }
+        });
+        
+        // Process transcription results as they come
+        let finalTranscript = '';
         loadingMessage.value = 'Transcribing audio...';
-        const { transcript, notes } = await getSummary(audioBlob);
-        const summary = notes;
-
-        // Store transcript
+        
+        for await (const result of transcription) {
+            currentTranscriptionText.value = result.text;
+            transcriptionChunks.value = result.chunks;
+            
+            if (result.isComplete) {
+                finalTranscript = result.text;
+            }
+        }
+        
+        isTranscribing.value = false;
+        
+        // Store transcript in database
         await db.transcripts.add({
             sessionId: currentSession.id,
-            text: transcript
+            text: finalTranscript
         });
-
-        currentSession.transcript = transcript;
+        
+        currentSession.transcript = finalTranscript;
+        
+        // Send transcript to server for summarization
+        loadingMessage.value = 'Generating summary...';
+        const { notes } = await getSummaryFromTranscript(finalTranscript);
+        const summary = notes;
 
         // Store summary
         await db.summaries.add({
@@ -295,12 +335,21 @@ const processRecording = async (currentSession, audioBlob) => {
     } finally {
         loading.value = false;
         isProcessing.value = false;
+        isTranscribing.value = false;
     }
 };
 
-// Get summary from the server
+// Get summary from the transcript (instead of audio)
+const getSummaryFromTranscript = async (transcript) => {
+    // Send just the transcript to server for summarization
+    let result = await serverMethods.session.summarizeTranscript(transcript);
+    if (await checkAndShowHttpError(result))
+        throw new Error("error summarizing");
+    return result.data;
+};
+
+// The original getSummary is now only used as fallback
 const getSummary = async (audioBlob) => {
-    // post audioBlob to server
     let result = await serverMethods.session.summarize(audioBlob);
     if (await checkAndShowHttpError(result))
         throw new Error("error transcribing");
@@ -410,6 +459,25 @@ onBeforeUnmount(() => {
                     <span class="visually-hidden">Loading...</span>
                 </div>
                 <div>{{ loadingMessage }}</div>
+                
+                <!-- Transcription progress display -->
+                <div v-if="isTranscribing" class="transcription-progress mt-4">
+                    <div v-if="transcriptionProgress < 1" class="progress mb-2" style="width: 80%;">
+                        <div class="progress-bar" role="progressbar"
+                            :style="{ width: `${transcriptionProgress * 100}%` }"
+                            :aria-valuenow="transcriptionProgress * 100" 
+                            aria-valuemin="0" aria-valuemax="100">
+                            {{ Math.round(transcriptionProgress * 100) }}%
+                        </div>
+                    </div>
+                    
+                    <div v-if="currentTranscriptionText" class="current-transcription mt-3">
+                        <h5>Live Transcription:</h5>
+                        <div class="transcription-box">
+                            <p style="white-space: pre-line">{{ currentTranscriptionText }}</p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div v-if="showTranscriptModal && session && session.transcript" class="modal-background"
@@ -652,6 +720,30 @@ onBeforeUnmount(() => {
     audio {
         width: 100%;
         max-width: 300px;
+    }
+
+    // New styles for transcription display
+    .transcription-progress {
+        width: 80%;
+        max-width: 600px;
+    }
+    
+    .current-transcription {
+        width: 100%;
+        text-align: left;
+    }
+    
+    .transcription-box {
+        max-height: 300px;
+        overflow-y: auto;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 5px;
+        border: 1px solid #dee2e6;
+        margin-top: 10px;
+        text-align: left;
+        font-size: 0.9rem;
+        line-height: 1.5;
     }
 
     /* Mobile optimizations */
