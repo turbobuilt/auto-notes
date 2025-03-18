@@ -26,16 +26,16 @@ export class VideoCallSignaling {
         // Try to get media access with permission checking
         try {
           // First check if we have permissions
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const hasVideoPermission = devices.some(device => 
-            device.kind === 'videoinput' && device.label !== '');
-          const hasAudioPermission = devices.some(device => 
-            device.kind === 'audioinput' && device.label !== '');
+          // const devices = await navigator.mediaDevices.enumerateDevices();
+          // const hasVideoPermission = devices.some(device => 
+          //   device.kind === 'videoinput' && device.label !== '');
+          // const hasAudioPermission = devices.some(device => 
+          //   device.kind === 'audioinput' && device.label !== '');
           
-          // If we already have permissions, proceed with getLocalStream
-          if (hasVideoPermission && hasAudioPermission) {
-            await this.webrtcService.getLocalStream();
-          } else {
+          // // If we already have permissions, proceed with getLocalStream
+          // if (hasVideoPermission && hasAudioPermission) {
+          //   await this.webrtcService.getLocalStream();
+          // } else {
             // Otherwise, explicitly request permissions first
             const stream = await navigator.mediaDevices.getUserMedia({ 
               video: true, 
@@ -44,7 +44,7 @@ export class VideoCallSignaling {
             
             // Manually pass the stream to WebRTC service
             await this.webrtcService.setLocalStream(stream);
-          }
+          // }
         } catch (streamError) {
           console.error('Media access error:', streamError);
           // Continue without local media

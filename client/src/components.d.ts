@@ -13,6 +13,7 @@ declare module 'vue' {
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    VideoParticipant: typeof import('./components/VideoParticipant.vue')['default']
     WebsiteFooter: typeof import('./components/WebsiteFooter.vue')['default']
     WebsiteMenu: typeof import('./components/WebsiteMenu.vue')['default']
   }

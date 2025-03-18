@@ -30,5 +30,3 @@ export async function example() {
         }
     }
 }
-
-example().catch(console.error);

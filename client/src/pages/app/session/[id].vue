@@ -299,7 +299,7 @@ const processRecording = async (currentSession, audioBlob) => {
                 finalTranscript = result.text;
             }
         }
-        
+        console.log('Final transcript:', finalTranscript);
         isTranscribing.value = false;
         
         // Store transcript in database
@@ -574,7 +574,7 @@ onBeforeUnmount(() => {
                                     </small>
                                 </div>
                             </div>
-
+                            
                             <div class="mb-4">
                                 <button v-if="session.transcript" class="btn btn-outline-secondary"
                                     @click="showTranscriptModal = true">

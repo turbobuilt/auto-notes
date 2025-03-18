@@ -6,6 +6,7 @@ import Layouts from 'vite-plugin-vue-layouts'
 import Vue from '@vitejs/plugin-vue'
 import VueRouter from 'unplugin-vue-router/vite'
 import Vuetify, { transformAssetUrls } from 'vite-plugin-vuetify'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 // Utilities
 import { defineConfig } from 'vite'
@@ -14,6 +15,7 @@ import { fileURLToPath, URL } from 'node:url'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
+    basicSsl(),
     VueRouter({
       dts: 'src/typed-router.d.ts',
     }),
@@ -69,6 +71,9 @@ export default defineConfig({
     ],
   },
   server: {
+    https: {
+      
+    },
     port: 3000,
     proxy: {
       '/api': {

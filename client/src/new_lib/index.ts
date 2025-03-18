@@ -77,7 +77,6 @@ export async function transcribeAudio(
     // Set up message handler
     worker.addEventListener('message', (event) => {
         const message = event.data;
-        console.log("got messge", event)
         
         switch (message.status) {
             case 'progress':
