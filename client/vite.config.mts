@@ -15,7 +15,7 @@ import { fileURLToPath, URL } from 'node:url'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
-    basicSsl(),
+    // basicSsl(),
     VueRouter({
       dts: 'src/typed-router.d.ts',
     }),
@@ -71,9 +71,9 @@ export default defineConfig({
     ],
   },
   server: {
-    https: {
+    // https: {
       
-    },
+    // },
     port: 3000,
     proxy: {
       '/api': {
