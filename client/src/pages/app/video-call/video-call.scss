@@ -563,10 +563,17 @@
   height: 120px;
   bottom: 20px;
   right: 20px;
-  border-radius: 8px;
   overflow: hidden;
-  border: 2px solid white;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  video {
+    border-radius: 8px;
+    border: 2px solid white;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+  }
 }
 
 /* Media query for mobile */

@@ -10,14 +10,11 @@ import { VideoCallSignaling } from '@/lib/videoCallSignaling';
 import { WebRTCService } from '@/lib/webrtcService';
 import VideoParticipant from '@/components/VideoParticipant.vue';
 
-console.log(store.user)
+console.log("user is", store.user)
 
 // Plain (non-reactive) variables for media and WebRTC related objects
 let rtcService: WebRTCService | null = null;
 let signaling: VideoCallSignaling | null = null;
-let localStream: MediaStream | null = null;
-let originalStream: MediaStream | null = null;
-let remoteStreams: { id: string, stream: MediaStream }[] = [];
 let wsService: any = null;
 
 // Reactive data for UI state only
@@ -31,7 +28,17 @@ const d = reactive({
     isCopied: false,
     isMobile: window.innerWidth <= 768,
     hasRemoteConnections: false,
+    mediaLoading: true, // New flag to track media loading state
+    loadingStage: 'initializing', // New property to track loading stage
+    error: null as string | null, // To track errors during initialization
+    connectionTimeout: false, // Flag for connection timeout
 })
+
+// Define the missing reactive variables
+const remoteStreams = ref<Array<{ id: string, stream: MediaStream }>>([]);
+const selectedRemoteStream = ref<{ id: string, stream: MediaStream } | null>(null);
+const showLocalVideoInCenter = computed(() => remoteStreams.value.length === 0 && !selectedRemoteStream.value);
+const shareUrl = computed(() => `${window.location.origin}/app/video-call/${d.videoCall?.id}`);
 
 // Track connection statuses
 const connectionStatuses = reactive(new Map<string, 'active' | 'stale' | 'dead'>());
@@ -41,102 +48,266 @@ const isVideoEnabled = ref<boolean>(true);
 const isAudioEnabled = ref<boolean>(true);
 const isScreenSharing = ref<boolean>(false);
 
-const videoContainerRef = ref<HTMLDivElement | null>(null);
-const shareUrl = computed(() => window.location.href);
-const routeId = computed(() => (router.currentRoute.value?.params as any).id);
+// Add timeout handling
+let connectionTimeoutId: number | null = null;
 
-// Add reactive reference for the selected remote stream
-const selectedRemoteStream = ref<{ id: string, stream: MediaStream } | null>(null);
+// Get local stream for UI display - uses rtcService as source of truth
+const localStream = computed(() => rtcService?.localStream || null);
 
-// This computed property will control local video animation state
-const showLocalVideoInCenter = computed(() => {
-    return !d.hasRemoteConnections || (remoteStreams.length === 0 && !selectedRemoteStream.value);
-});
+const routeId = computed(() => (router.currentRoute?.value?.params as any)?.id as string);
 
-// Handle new remote stream
-const handleRemoteStreamAdded = (connectionId: string, stream: MediaStream) => {
-    console.log(`Remote stream added from ${connectionId}`, stream);
-
-    // Check if we already have this stream
-    const existingIndex = remoteStreams.findIndex(s => s.id === connectionId);
-
+// Define the missing handler functions
+function handleRemoteStreamAdded(connectionId: string, stream: MediaStream) {
+    console.log(`Remote stream added from ${connectionId}`);
+    
+    // Check if this stream is already in our list
+    const existingIndex = remoteStreams.value.findIndex(s => s.id === connectionId);
+    
     if (existingIndex >= 0) {
-        // Update existing stream
-        remoteStreams[existingIndex].stream = stream;
+        // Replace the existing stream
+        remoteStreams.value[existingIndex] = { id: connectionId, stream };
     } else {
-        // Add new stream
-        remoteStreams.push({ id: connectionId, stream });
-
-        // Auto-select the first remote stream that connects
-        if (!selectedRemoteStream.value) {
-            selectRemoteStream({ id: connectionId, stream });
+        // Add the new stream
+        remoteStreams.value.push({ id: connectionId, stream });
+        
+        // Auto-select the first remote stream we receive if nothing is currently selected
+        // This ensures the remote stream is displayed in the main view automatically
+        if (!selectedRemoteStream.value && remoteStreams.value.length === 1) {
+            selectRemoteStream(remoteStreams.value[0]);
         }
     }
-
-    // Update the connection IDs list for UI
-    d.remoteConnectionIds = remoteStreams.map(s => s.id);
-
-    // Update the hasRemoteConnections flag to trigger animation
-    d.hasRemoteConnections = true;
-
-    // Initialize connection status as active
-    connectionStatuses.set(connectionId, 'active');
+    
+    // Update remote connections flag
+    d.hasRemoteConnections = remoteStreams.value.length > 0 || !!selectedRemoteStream.value;
+    
+    // Log the event
+    d.events.push({
+        type: 'stream',
+        data: { connectionId, action: 'added' },
+        time: new Date()
+    });
 }
 
-// Handle connection status changes
-const handleConnectionStatusChanged = (connectionId: string, status: 'active' | 'stale' | 'dead') => {
+function handleConnectionStatusChanged(connectionId: string, status: 'active' | 'stale' | 'dead') {
     console.log(`Connection status changed for ${connectionId}: ${status}`);
-
-    // Update status in our tracking map
+    
+    // Update status in our reactive map
     connectionStatuses.set(connectionId, status);
-
+    
+    // If the connection is dead, remove it from our streams
+    if (status === 'dead') {
+        // Check if it's the selected stream
+        if (selectedRemoteStream.value && selectedRemoteStream.value.id === connectionId) {
+            selectedRemoteStream.value = null;
+        }
+        
+        // Remove from remote streams list
+        const index = remoteStreams.value.findIndex(s => s.id === connectionId);
+        if (index >= 0) {
+            remoteStreams.value.splice(index, 1);
+        }
+        
+        // Update connection flags
+        d.hasRemoteConnections = remoteStreams.value.length > 0 || !!selectedRemoteStream.value;
+    }
+    
     // Log the event
     d.events.push({
         type: 'connection',
         data: { connectionId, status },
         time: new Date()
     });
+}
 
-    // Automatically close dead connections after a short delay
-    if (status === 'dead') {
-        setTimeout(() => {
-            // Check if status is still dead before closing
-            if (connectionStatuses.get(connectionId) === 'dead') {
-                closeDeadConnection(connectionId);
+// Modified onMounted to separate media initialization and connection setup
+onMounted(async () => {
+    await router.isReady();
+    
+    console.log("Video call component mounted, setting up...");
+    
+    // Set a timeout to prevent infinite loading
+    connectionTimeoutId = window.setTimeout(() => {
+        console.warn("Connection attempt timed out");
+        d.connectionTimeout = true;
+        d.loading = false;
+        d.error = "Connection timed out. Please try refreshing the page.";
+    }, 15000); // 15 second timeout
+    
+    try {
+        let websocketPromise = initVideoCallWebSocket(d.connectionId, d);
+        // Create WebRTC service first
+        rtcService = new WebRTCService((signal) => {
+            // This will be replaced when signaling is initialized
+            console.log("Signal callback called before initialization:", signal);
+        });
+        
+        // Start media initialization early
+        d.loadingStage = 'accessing camera';
+        d.mediaLoading = true;
+        try {
+            await rtcService.startLocalStream(true, true);
+        } catch (error) {
+            console.error('Error initializing local media:', error);
+            d.events.push({
+                type: 'error',
+                data: `Media initialization error: ${error.message || error}`,
+                time: new Date()
+            });
+            d.error = `Media error: ${error.message || 'Could not access camera/microphone'}`;
+            // Continue without media
+        } finally {
+            d.mediaLoading = false;
+        }
+        
+        // Initialize WebSocket in parallel
+        d.loadingStage = 'connecting to server';
+        console.log("Initializing WebSocket...");
+        wsService = await websocketPromise;
+        console.log("WebSocket initialized:", wsService);
+        
+        if (routeId.value === 'new') {
+            d.loadingStage = 'creating new call';
+            console.log("Creating new video call...");
+            await createVideoCall();
+            router.replace({ params: { id: d.videoCall.id } });
+            console.log("New call created:", d.videoCall);
+        } else {
+            d.loadingStage = 'joining existing call';
+            console.log("Joining existing call:", routeId.value);
+            // Join the existing call directly via WebSocket
+            try {
+                await setTimeout(() => {}, 1000); // Simulate delay for WebSocket connection
+                const result = await joinVideoCall(wsService, routeId.value, d.connectionId);
+                console.log("Joined call via WebSocket:", result);
+                d.videoCall = result.videoCall;
+    
+                // Log active connections
+                d.events.push({
+                    type: 'system',
+                    data: { message: `Joined call with ${result.activeConnections?.length || 0} active connections` },
+                    time: new Date()
+                });
+            } catch (error) {
+                console.error("Error joining video call:", error);
+                d.events.push({
+                    type: 'error',
+                    data: `Join error: ${error.message || error}`,
+                    time: new Date()
+                });
+    
+                // Try fallback to server method if WebSocket join fails
+                console.log("Trying fallback API method...");
+                let result = await serverMethods.videoCall.create([d.connectionId]);
+                if (await checkAndShowHttpError(result)) {
+                    throw new Error("Failed to create or join call");
+                }
+                d.videoCall = result.data.videoCall;
             }
-        }, 1000); // Small delay to allow for recovery
+        }
+    
+        // Clear timeout as we've successfully connected
+        if (connectionTimeoutId) {
+            clearTimeout(connectionTimeoutId);
+            connectionTimeoutId = null;
+        }
+        
+        d.loading = false;
+        d.loadingStage = 'setting up media';
+        console.log("Initial loading complete, setting up media...");
+    
+        // Initialize signaling service with existing rtcService
+        if (wsService && d.videoCall && rtcService) {
+            d.loadingStage = 'establishing connections';
+            signaling = new VideoCallSignaling(wsService, d, rtcService);
+    
+            // Initialize WebRTC connections but skip media initialization 
+            // since we already did it separately
+            try {
+                // Join the call
+                await sendMessage('join', { connectionId: d.connectionId });
+    
+                // Initialize WebRTC connections with existing participants
+                await signaling.initialize(d.connectionId, 3, true); // Skip media initialization
+    
+                // Set remote stream handler
+                if (rtcService) {
+                    rtcService.setOnRemoteStreamAdded(handleRemoteStreamAdded);
+                    rtcService.setOnConnectionStatusChanged(handleConnectionStatusChanged);
+                }
+    
+                // Set up polling to check for new connections (backup for missing events)
+                const connectionPoller = setInterval(() => {
+                    if (!rtcService) {
+                        clearInterval(connectionPoller);
+                        return;
+                    }
+    
+                    const connections = rtcService.getConnectionsWithRemoteStreams();
+                    for (const conn of connections) {
+                        // Add any missing streams
+                        if (conn.remoteStream &&
+                            !remoteStreams.value.some(s => s.id === conn.connectionId)) {
+                            handleRemoteStreamAdded(conn.connectionId, conn.remoteStream);
+                        }
+                    }
+                }, 2000);
+                
+                d.loadingStage = 'ready';
+                console.log("Video call setup complete");
+            } catch (error) {
+                console.error('Error setting up WebRTC:', error);
+                d.events.push({
+                    type: 'error',
+                    data: `WebRTC setup error: ${error.message || error}`,
+                    time: new Date()
+                });
+                d.error = `Connection error: ${error.message || 'Could not establish video connection'}`;
+            }
+        }
+    } catch (error) {
+        console.error("Fatal error during video call setup:", error);
+        d.error = `Error: ${error.message || 'Something went wrong'}`;
+        d.loading = false;
+        
+        // Clear timeout if it exists
+        if (connectionTimeoutId) {
+            clearTimeout(connectionTimeoutId);
+            connectionTimeoutId = null;
+        }
     }
-}
+})
 
-// Close a dead connection
-const closeDeadConnection = (connectionId: string) => {
-    console.log(`Closing dead connection: ${connectionId}`);
-
-    // Check if this is our selected stream
-    if (selectedRemoteStream.value && selectedRemoteStream.value.id === connectionId) {
-        selectedRemoteStream.value = null;
+onUnmounted(() => {
+    // Clear any pending timeouts
+    if (connectionTimeoutId) {
+        clearTimeout(connectionTimeoutId);
+        connectionTimeoutId = null;
+    }
+    
+    // Leave the call
+    if (d.wsConnected && d.videoCall) {
+        sendMessage('leave', { connectionId: d.connectionId })
+            .catch(console.error);
     }
 
-    // Remove connection from RTCService
+    // Clean up WebRTC
+    if (signaling) {
+        signaling.cleanup();
+        signaling = null;
+    }
+
+    // Clean up WebSocket connection
+    if (wsService) {
+        wsService.disconnect();
+        wsService = null;
+    }
+
+    // Perform cleanup on rtcService - this will stop all streams
     if (rtcService) {
-        rtcService.closeConnection(connectionId);
+        rtcService.closeAllConnections();
+        rtcService = null;
     }
-
-    // Remove from our tracking
-    connectionStatuses.delete(connectionId);
-
-    // Remove from remoteStreams array
-    const index = remoteStreams.findIndex(s => s.id === connectionId);
-    if (index >= 0) {
-        remoteStreams.splice(index, 1);
-        d.remoteConnectionIds = remoteStreams.map(s => s.id);
-    }
-
-    // If no more remote streams, update hasRemoteConnections
-    if (remoteStreams.length === 0 && !selectedRemoteStream.value) {
-        d.hasRemoteConnections = false;
-    }
-}
+})
 
 // Function to select a remote stream as the main view
 function selectRemoteStream(streamData: { id: string, stream: MediaStream }) {
@@ -144,8 +315,8 @@ function selectRemoteStream(streamData: { id: string, stream: MediaStream }) {
     // we need to swap them
     if (selectedRemoteStream.value && selectedRemoteStream.value.id !== streamData.id) {
         // Add current selected stream back to the sidebar (if it's not already there)
-        if (!remoteStreams.some(s => s.id === selectedRemoteStream.value!.id)) {
-            remoteStreams.push(selectedRemoteStream.value);
+        if (!remoteStreams.value.some(s => s.id === selectedRemoteStream.value!.id)) {
+            remoteStreams.value.push(selectedRemoteStream.value);
         }
     }
 
@@ -153,9 +324,9 @@ function selectRemoteStream(streamData: { id: string, stream: MediaStream }) {
     selectedRemoteStream.value = streamData;
 
     // Remove the selected stream from the sidebar list
-    const index = remoteStreams.findIndex(s => s.id === streamData.id);
+    const index = remoteStreams.value.findIndex(s => s.id === streamData.id);
     if (index >= 0) {
-        remoteStreams.splice(index, 1);
+        remoteStreams.value.splice(index, 1);
     }
 }
 
@@ -178,133 +349,6 @@ function showControls() {
         hideControlsTimeout = null;
     }, 3000);
 }
-
-onMounted(async () => {
-    await router.isReady();
-
-    // Initialize WebSocket first
-    wsService = await initVideoCallWebSocket(d.connectionId, d);
-
-    if (routeId.value === 'new') {
-        await createVideoCall();
-        router.replace({ params: { id: d.videoCall.id } });
-    } else {
-        // Join the existing call directly via WebSocket
-        try {
-            const result = await joinVideoCall(wsService, routeId.value, d.connectionId);
-            d.videoCall = result.videoCall;
-
-            // Log active connections
-            d.events.push({
-                type: 'system',
-                data: { message: `Joined call with ${result.activeConnections?.length || 0} active connections` },
-                time: new Date()
-            });
-        } catch (error) {
-            console.error("Error joining video call:", error);
-
-            // Try fallback to server method if WebSocket join fails
-            let result = await serverMethods.videoCall.create([d.connectionId]);
-            if (await checkAndShowHttpError(result)) return;
-            d.videoCall = result.data.videoCall;
-        }
-    }
-
-    d.loading = false;
-
-    // Initialize signaling service
-    if (wsService && d.videoCall) {
-        signaling = new VideoCallSignaling(wsService, d);
-
-        // Initialize WebRTC
-        try {
-            // Join the call
-            await sendMessage('join', { connectionId: d.connectionId });
-
-            // Initialize WebRTC and signaling
-            rtcService = await signaling.initialize(d.connectionId);
-
-            // Set remote stream handler
-            if (rtcService) {
-                rtcService.setOnRemoteStreamAdded(handleRemoteStreamAdded);
-                // Set connection status change handler
-                rtcService.setOnConnectionStatusChanged(handleConnectionStatusChanged);
-            }
-
-            // Save local stream reference
-            localStream = rtcService.getLocalMediaStream();
-
-            // Set up polling to check for new connections (backup for missing events)
-            const connectionPoller = setInterval(() => {
-                if (!rtcService) {
-                    clearInterval(connectionPoller);
-                    return;
-                }
-
-                const connections = rtcService.getConnectionsWithRemoteStreams();
-                for (const conn of connections) {
-                    // Add any missing streams
-                    if (conn.remoteStream &&
-                        !remoteStreams.some(s => s.id === conn.connectionId)) {
-                        handleRemoteStreamAdded(conn.connectionId, conn.remoteStream);
-                    }
-                }
-            }, 2000);
-        } catch (error) {
-            console.error('Error setting up WebRTC:', error);
-            d.events.push({
-                type: 'error',
-                data: `WebRTC setup error: ${error.message || error}`,
-                time: new Date()
-            });
-        }
-    }
-})
-
-onUnmounted(() => {
-    // Leave the call
-    if (d.wsConnected && d.videoCall) {
-        sendMessage('leave', { connectionId: d.connectionId })
-            .catch(console.error);
-    }
-
-    // Clean up WebRTC
-    if (signaling) {
-        signaling.cleanup();
-        signaling = null;
-    }
-
-    // Clean up WebSocket connection
-    if (wsService) {
-        wsService.disconnect();
-        wsService = null;
-    }
-
-    // Stop screen sharing if active
-    if (isScreenSharing.value && originalStream) {
-        stopScreenSharing();
-    }
-
-    // Perform cleanup on rtcService
-    if (rtcService) {
-        rtcService.closeAllConnections();
-        rtcService = null;
-    }
-
-    // Stop all streams
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        localStream = null;
-    }
-
-    if (originalStream) {
-        originalStream.getTracks().forEach(track => track.stop());
-        originalStream = null;
-    }
-
-    // Clear remote streams array
-    remoteStreams = [];
-})
 
 async function createVideoCall() {
     let result = await serverMethods.videoCall.create([d.connectionId]);
@@ -345,68 +389,43 @@ function toggleVideo() {
 async function startScreenSharing() {
     try {
         if (!rtcService) return;
-
-        // Save original stream for later
-        originalStream = localStream;
-
-        // Get screen share stream
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: true
-        });
-
-        // Update local stream reference
-        localStream = screenStream;
-
-        // Replace tracks in all peer connections
-        const videoTrack = screenStream.getVideoTracks()[0];
-        const connections = rtcService.getConnections();
-
-        for (const conn of connections) {
-            const senders = conn.connection.getSenders();
-            const sender = senders.find(s => s.track && s.track.kind === 'video');
-            if (sender) {
-                await sender.replaceTrack(videoTrack);
+        
+        const success = await rtcService.startScreenSharing();
+        if (success) {
+            isScreenSharing.value = true;
+            
+            // Listen for screen share ending
+            const videoTrack = rtcService.localStream?.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.onended = () => {
+                    stopScreenSharing();
+                };
             }
         }
-
-        isScreenSharing.value = true;
-
-        // Set up track ended event
-        videoTrack.onended = () => {
-            stopScreenSharing();
-        };
     } catch (error) {
         console.error('Error starting screen share:', error);
+        d.events.push({
+            type: 'error',
+            data: `Screen sharing error: ${error.message || error}`,
+            time: new Date()
+        });
     }
 }
 
 // Stop screen sharing
 async function stopScreenSharing() {
     try {
-        if (!rtcService || !originalStream || !localStream) return;
-
-        // Stop all tracks in screen sharing stream
-        localStream.getTracks().forEach(track => track.stop());
-
-        // Restore original stream
-        localStream = originalStream;
-        originalStream = null;
-
-        // Replace tracks in all peer connections
-        const videoTrack = localStream.getVideoTracks()[0];
-        const connections = rtcService.getConnections();
-
-        for (const conn of connections) {
-            const senders = conn.connection.getSenders();
-            const sender = senders.find(s => s.track && s.track.kind === 'video');
-            if (sender) {
-                await sender.replaceTrack(videoTrack);
-            }
-        }
-
+        if (!rtcService) return;
+        
+        await rtcService.stopScreenSharing();
         isScreenSharing.value = false;
     } catch (error) {
         console.error('Error stopping screen share:', error);
+        d.events.push({
+            type: 'error',
+            data: `Screen sharing error: ${error.message || error}`,
+            time: new Date()
+        });
     }
 }
 
@@ -422,20 +441,63 @@ function copyInviteLink() {
         .catch(console.error);
 }
 
+// Function to initialize local media when retry button is clicked
+async function initializeLocalMedia() {
+    try {
+        d.mediaLoading = true;
+        
+        if (rtcService) {
+            await rtcService.startLocalStream(true, true);
+            d.error = null; // Clear any previous errors
+        }
+    } catch (error) {
+        console.error('Error initializing media:', error);
+        d.error = `Camera access failed: ${error.message || error}`;
+    } finally {
+        d.mediaLoading = false;
+    }
+}
+function reload() {
+    window.location.reload()
+}
 // Helper function to count total active participants
 function getTotalActiveParticipants() {
-    // Count:
-    // 1. The local participant (always 1)
-    // 2. Remote streams in the sidebar
-    // 3. Selected remote stream (if any)
-    return 1 + remoteStreams.length + (selectedRemoteStream.value ? 1 : 0);
+    return 1 + remoteStreams.value.length;
 }
 </script>
 
 <template>
     <div class="video-call-container">
-        <div v-if="d.loading || !d.videoCall" class="loading">Loading...</div>
+        <div v-if="d.loading || !d.videoCall" class="loading">
+            <div class="loading-content">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">
+                    <p>Loading video call... ({{ d.loadingStage }})</p>
+                    
+                    <!-- Display debug info for troubleshooting -->
+                    <div v-if="d.connectionTimeout" class="loading-error">
+                        Connection is taking longer than expected.
+                        <button @click="reload">Refresh Page</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div v-else-if="d.error" class="error-container">
+            <div class="error-message">
+                <h3>Error</h3>
+                <p>{{ d.error }}</p>
+                <button @click="reload">Try Again</button>
+            </div>
+        </div>
         <div v-else>
+            <!-- Add media loading indicator -->
+            <div v-if="d.mediaLoading" class="media-loading-overlay">
+                <div class="media-loading-message">
+                    <span class="loading-spinner"></span>
+                    Initializing camera and microphone...
+                </div>
+            </div>
+            
             <div class="call-info">
                 <h2>Video Call: {{ d.videoCall.id }}</h2>
                 <div class="connection-status" :class="{ connected: d.wsConnected }">
@@ -492,6 +554,7 @@ function getTotalActiveParticipants() {
 
                 <!-- Sidebar for additional videos - only show with more than 2 participants -->
                 <div v-if="getTotalActiveParticipants() > 2" class="video-sidebar">
+                    {{ getTotalActiveParticipants() }}
                     <!-- Map over remote streams array to display each one -->
                     <div v-for="streamData in remoteStreams" :key="streamData.id" class="video-thumbnail">
                         <VideoParticipant :stream="streamData.stream" :connection-id="streamData.id"
@@ -514,6 +577,12 @@ function getTotalActiveParticipants() {
                 <p v-if="remoteStreams.length > 0" class="success-message">
                     {{ remoteStreams.length + (selectedRemoteStream ? 1 : 0) }} remote stream(s) connected
                 </p>
+                
+                <!-- Show media status -->
+                <div class="media-status">
+                    <p>Media Status: {{ localStream ? 'Ready' : 'Not Available' }}</p>
+                    <button v-if="!localStream" @click="initializeLocalMedia">Retry Camera Access</button>
+                </div>
             </div>
 
             <!-- Events log -->
@@ -531,4 +600,97 @@ function getTotalActiveParticipants() {
 
 <style>
 @import "./video-call.scss";
+
+/* Add styles for media loading indicator */
+.media-loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 10px;
+    text-align: center;
+    z-index: 1000;
+    animation: fadeIn 0.3s;
+}
+
+/* Enhanced loading styles */
+.loading {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(255, 255, 255, 0.9);
+    z-index: 1000;
+}
+
+.loading-content {
+    text-align: center;
+    padding: 20px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.loading-spinner {
+    display: inline-block;
+    width: 40px;
+    height: 40px;
+    border: 4px solid rgba(0,0,0,0.1);
+    border-radius: 50%;
+    border-top-color: #0066cc;
+    animation: spin 1s linear infinite;
+    margin-bottom: 15px;
+}
+
+.loading-text {
+    margin-top: 10px;
+}
+
+.loading-error {
+    margin-top: 15px;
+    color: #cc0000;
+}
+
+.error-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+}
+
+.error-message {
+    background: #fff1f0;
+    border: 1px solid #ffa39e;
+    padding: 20px;
+    border-radius: 8px;
+    text-align: center;
+    max-width: 500px;
+}
+
+.error-message button {
+    margin-top: 10px;
+    padding: 8px 16px;
+    background: #0066cc;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* ...existing code... */
 </style>

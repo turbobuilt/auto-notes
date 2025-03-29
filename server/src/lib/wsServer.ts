@@ -62,7 +62,8 @@ export function setupWebSocketServer(wss: WebSocketServer) {
         });
         
         console.log(`WebSocket connected: ${connectionId}${userId ? ` (User: ${userId})` : ''}`);
-        
+        // send quick message
+        ws.send(JSON.stringify({ type: 'connected', message: 'Welcome to the WebSocket server!' }));
         // Setup ping to keep connection alive
         const pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
@@ -76,7 +77,7 @@ export function setupWebSocketServer(wss: WebSocketServer) {
         ws.on('message', async (message) => {
             try {
                 const data = JSON.parse(message.toString());
-                
+                console.log("Got message", data)
                 // Handle ping messages to keep connection alive
                 if (data.type === 'ping') {
                     const conn = activeWebSocketConnections.get(connectionId);
@@ -170,8 +171,9 @@ async function handleWebSocketMethod(ws: WebSocket, data: any, userId?: string) 
         };
         
         // Execute method
+        console.log("doing method", data.method, routeParams);
         const result = await handler(routeParams, ...(data.args || []));
-        
+        console.log("result", result);
         // Send result back
         ws.send(JSON.stringify({ 
             id: data.id,

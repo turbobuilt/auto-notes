@@ -11,10 +11,9 @@ export default route(async function (params, { email, password }) {
     user.email = email;
     user.passwordHash = await hashPassword(password);
     await db.insert(user);
-    delete user.passwordHash;
 
     let authToken = await createToken(user);
-    return { user, authToken: authToken.authToken, expires: authToken.expires };
+    return { user: User.getProfile(user), authToken: authToken.authToken, expires: authToken.expires };
 }, {
     public: true
 });

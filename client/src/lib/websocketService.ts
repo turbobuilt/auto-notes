@@ -44,19 +44,6 @@ export class WebSocketService {
                 this.ws = new WebSocket(url.toString());
                 
                 this.ws.onopen = () => {
-                    this.connected = true;
-                    this.connecting = false;
-                    
-                    // Process any queued messages
-                    this.processQueue();
-                    
-                    // Setup ping interval
-                    setInterval(() => this.ping(), 25000);
-                    
-                    // Notify event listeners
-                    this.notifyEventListeners('connect', {});
-                    
-                    resolve();
                 };
                 
                 this.ws.onclose = (event) => {
@@ -85,6 +72,23 @@ export class WebSocketService {
                 this.ws.onmessage = (event) => {
                     try {
                         const data: WSMessage = JSON.parse(event.data);
+                        if (data.type === "connected") {
+                            this.connected = true;
+                            this.connecting = false;
+                            this.connected = true;
+                            this.connecting = false;
+                            
+                            // Process any queued messages
+                            this.processQueue();
+                            
+                            // Setup ping interval
+                            setInterval(() => this.ping(), 25000);
+                            
+                            // Notify event listeners
+                            this.notifyEventListeners('connect', {});
+                            
+                            resolve();
+                        }
                         
                         // If it's a response to a message
                         if (data.id && this.messageHandlers.has(data.id)) {
@@ -163,6 +167,7 @@ export class WebSocketService {
 
     private async sendMessage(message: any): Promise<any> {
         if (!this.ws || !this.connected) {
+            console.warn('WebSocket not connected, queuing message:', message);
             // Queue message if not connected
             return new Promise((resolve, reject) => {
                 this.messageQueue.push({ message, resolve, reject });
@@ -185,7 +190,7 @@ export class WebSocketService {
                     resolve(response.result);
                 }
             });
-            
+            console.log('Sending message:', message, this.ws);
             this.ws!.send(JSON.stringify(message));
             
             // Set timeout for response

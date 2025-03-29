@@ -9,6 +9,11 @@ export class User{
     email: string;
     phone: string;
     passwordHash: string;
+
+    static getProfile(user: User) {
+        const { passwordHash, ...userWithoutPassword } = user;
+        return userWithoutPassword;
+    }
 }
 
 export function getUserForClient(user: User) {

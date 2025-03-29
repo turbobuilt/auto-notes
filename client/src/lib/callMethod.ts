@@ -8,7 +8,7 @@ export default async function callMethod(method: string, args: any[], options: {
     } as any;
     let baseUrl = "/function";
     if (typeof window !== "undefined") {
-        if (window.location.hostname === "portal.turbobuilt.com" || window.location.origin.replace(/:\d+/,"").endsWith("smarthost.co")  || window.location.origin.replace(/:\d+/,"").endsWith("localhost")) {
+        if (true || window.location.hostname === "portal.turbobuilt.com" || window.location.origin.replace(/:\d+/,"").endsWith("smarthost.co")  || window.location.origin.replace(/:\d+/,"").endsWith("localhost")) {
             baseUrl = "/api/method";
             try {
                 let { store } = await import("../store");

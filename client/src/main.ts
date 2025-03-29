@@ -17,9 +17,6 @@ async function main() {
     await router.isReady();
     // console.log("Loading LLM");
     // loadLlm();
-
-
-
     
     let unauthenticatedRoutes = new Set(['/app/login', '/app/register', '/app/video-call']);
     if (unauthenticatedRoutes.has(router.currentRoute.value.path) || !router.currentRoute.value.path.startsWith('/app') || router.currentRoute.value.path.startsWith('/app/video-call')) {

@@ -116,23 +116,12 @@ watch(() => props.stream, (newStream) => {
   transform: scale(1.05);
 }
 
-.size-floating {
-  position: absolute;
-  width: 180px;
-  height: 120px;
-  bottom: 20px;
-  right: 20px;
-  border: 2px solid white;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-  z-index: 10;
-}
-
 /* Status indicators, overlays etc. are inherited from the global styles */
 
 @media (max-width: 768px) {
   .size-floating {
-    width: 100px;
-    height: 80px;
+    width: 100%;
+    height: 100%;
   }
   
   .size-sidebar {

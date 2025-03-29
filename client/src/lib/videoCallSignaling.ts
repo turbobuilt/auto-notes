@@ -8,43 +8,30 @@ export class VideoCallSignaling {
   private wsService: WebSocketService;
   private state: VideoCallWebSocketState;
   
-  constructor(wsService: any, state: VideoCallWebSocketState) {
+  constructor(wsService: any, state: VideoCallWebSocketState, existingWebRTCService?: WebRTCService) {
     this.wsService = wsService;
     this.state = state;
     
-    // Initialize WebRTC service with signal callback
-    this.webrtcService = new WebRTCService(this.sendSignal.bind(this));
+    // Use existing WebRTC service if provided, otherwise create a new one
+    this.webrtcService = existingWebRTCService || new WebRTCService(this.sendSignal.bind(this));
+    
+    // If we're using an existing service, make sure to set the signal callback
+    if (existingWebRTCService) {
+      this.webrtcService.setSignalCallback(this.sendSignal.bind(this));
+    }
     
     // Set up signal handling
     this.setupSignalHandling();
   }
   
-  // Initialize signaling and WebRTC
+  // Initialize signaling and WebRTC with better event handling
   async initialize(localConnectionId: string, maxRetries = 3, skipMedia = false): Promise<WebRTCService> {
     try {
       if (!skipMedia) {
-        // Try to get media access with permission checking
+        // Try to get media access through WebRTCService
         try {
-          // First check if we have permissions
-          // const devices = await navigator.mediaDevices.enumerateDevices();
-          // const hasVideoPermission = devices.some(device => 
-          //   device.kind === 'videoinput' && device.label !== '');
-          // const hasAudioPermission = devices.some(device => 
-          //   device.kind === 'audioinput' && device.label !== '');
-          
-          // // If we already have permissions, proceed with getLocalStream
-          // if (hasVideoPermission && hasAudioPermission) {
-          //   await this.webrtcService.getLocalStream();
-          // } else {
-            // Otherwise, explicitly request permissions first
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-              video: true, 
-              audio: true 
-            });
-            
-            // Manually pass the stream to WebRTC service
-            await this.webrtcService.setLocalStream(stream);
-          // }
+          // Use the WebRTCService to handle getting the local stream
+          await this.webrtcService.startLocalStream(true, true);
         } catch (streamError) {
           console.error('Media access error:', streamError);
           // Continue without local media
@@ -57,6 +44,9 @@ export class VideoCallSignaling {
         }
       }
       
+      // Set up event listeners for WebRTC events
+      this.setupWebRTCEventListeners();
+      
       // Set up connections with other participants if they exist
       if (this.state.videoCall && this.state.videoCall.connections) {
         // Filter out our own connection ID and any null connections
@@ -67,8 +57,10 @@ export class VideoCallSignaling {
         
         // Create peer connections for each participant
         for (const connId of otherConnections) {
-          // We'll be the initiator for connections to existing participants
-          await this.webrtcService.createPeerConnection(connId, true);
+          // Determine initiator based on connection ID comparison
+          const isInitiator = localConnectionId < connId;
+          console.log(`Connection to ${connId}: isInitiator=${isInitiator} (local=${localConnectionId})`);
+          await this.webrtcService.createPeerConnection(connId, isInitiator);
         }
       }
       
@@ -77,6 +69,31 @@ export class VideoCallSignaling {
       console.error('Error initializing video call:', error);
       throw error;
     }
+  }
+  
+  // New method to setup WebRTC event listeners
+  private setupWebRTCEventListeners(): void {
+    // Listen for remote streams being added
+    this.webrtcService.on('remoteStreamAdded', (connectionId: string, stream: MediaStream) => {
+      console.log(`SignalingService: Remote stream added from ${connectionId}`);
+      // Update the list of remote connection IDs
+      if (!this.state.remoteConnectionIds.includes(connectionId)) {
+        this.state.remoteConnectionIds.push(connectionId);
+      }
+    });
+    
+    // Listen for connection status changes
+    this.webrtcService.on('connectionStatusChanged', (connectionId: string, status: 'active' | 'stale' | 'dead') => {
+      console.log(`SignalingService: Connection status changed for ${connectionId}: ${status}`);
+      
+      // If connection is dead, remove from remote connections list
+      if (status === 'dead') {
+        const index = this.state.remoteConnectionIds.indexOf(connectionId);
+        if (index >= 0) {
+          this.state.remoteConnectionIds.splice(index, 1);
+        }
+      }
+    });
   }
   
   // Set up handlers for signaling messages
@@ -130,26 +147,48 @@ export class VideoCallSignaling {
       });
     }
     
-    // Also listen for participant events (new-participant, participant-left)
-    this.wsService.on('new-participant', async (data: any) => {
+    // Replace the direct 'new-participant' handler with a 'videoCallSignal' handler
+    this.wsService.on('videoCallSignal', async (data: any) => {
       try {
-        const peerId = data.senderConnectionId || data.connectionId;
-        if (peerId) {
-          console.log("New participant joined:", peerId);
-          await this.webrtcService.createPeerConnection(peerId, true);
-          
-          // Add to events log
-          this.state.events.push({
-            type: 'participant',
-            data,
-            time: new Date()
-          });
+        // Check the event property to determine what type of signal it is
+        if (data.event === 'new-participant') {
+          console.log("new participant event:", data);
+          const peerId = data.senderConnectionId || data.connectionId;
+          if (peerId) {
+            console.log("New participant joined:", peerId);
+            
+            // Determine initiator based on connection ID comparison
+            const isInitiator = this.state.connectionId < peerId;
+            console.log(`Connection to ${peerId}: isInitiator=${isInitiator} (local=${this.state.connectionId})`);
+            await this.webrtcService.createPeerConnection(peerId, isInitiator);
+            
+            // Add to events log
+            this.state.events.push({
+              type: 'participant',
+              data,
+              time: new Date()
+            });
+          }
+        } else if (data.event === 'participant-left') {
+          const peerId = data.senderConnectionId || data.connectionId;
+          if (peerId) {
+            console.log("Participant left:", peerId);
+            this.webrtcService.closeConnection(peerId);
+            
+            // Add to events log
+            this.state.events.push({
+              type: 'participant',
+              data,
+              time: new Date()
+            });
+          }
         }
       } catch (error) {
-        console.error('Error handling new participant:', error);
+        console.error('Error handling videoCallSignal:', error);
       }
     });
     
+    // Keep the existing 'participant-left' handler for backward compatibility 
     this.wsService.on('participant-left', async (data: any) => {
       try {
         const peerId = data.senderConnectionId || data.connectionId;

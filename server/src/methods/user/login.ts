@@ -23,7 +23,11 @@ export default route(async function(params, { email, password }) {
     }
     let authToken = await createToken(user);
 
-    return { authToken: authToken.authToken, user: user.id, expires: authToken.expires }
+    return {
+        authToken: authToken.authToken,
+        user: User.getProfile(user),
+        expires: authToken.expires
+    }
 }, { public: true });
 
 export async function createToken(user) {
