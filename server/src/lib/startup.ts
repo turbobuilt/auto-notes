@@ -3,12 +3,13 @@ import { readFileSync } from "fs";
 // search for .env.development if exists
 // print wd
 let commonEnv = readFileSync(".env.common", { encoding: "utf-8" });
-
-let env = readFileSync(".env.development", { encoding: "utf-8" });
-process.env.NODE_ENV = "development";
-if (!env) {
+let env = "";
+try {
     process.env.NODE_ENV = "production";
     env = readFileSync(".env.production", { encoding: "utf-8" });
+} catch (e) {
+    env = readFileSync(".env.development", { encoding: "utf-8" });
+    process.env.NODE_ENV = "development";
 }
 const lines = (commonEnv + "\n" + env).split("\n").filter((line) => line.trim().length > 0);
 const envVars = {} as any;
