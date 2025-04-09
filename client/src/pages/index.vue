@@ -13,8 +13,6 @@ function work() {
   <div class="index-page">
     <WebsiteMenu />
 
-    <button @click="work">WORK</button>
-
     <!-- Hero Section -->
     <section class="hero">
       <div class="hero-content">

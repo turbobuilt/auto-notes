@@ -14,7 +14,7 @@ export async function transcribeAudio(
     } = {}
 ): Promise<AsyncGenerator<TranscriptionResult, void, unknown>> {
     const { 
-        model = 'Xenova/whisper-tiny', 
+        model = 'distil-whisper/distil-medium.en', 
         multilingual = false, 
         quantized = true,
         subtask = 'transcribe',

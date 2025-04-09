@@ -8,6 +8,8 @@ import { recorderService } from "@/lib/recorderService";
 import { useRoute, useRouter } from 'vue-router';
 // Import the transcription utilities
 import { transcribeAudio } from '@/new_lib/index';
+// Import the summarization utility
+import { summarizeTranscript } from '@/llm/summarizeTranscript';
 
 const route = useRoute();
 const router = useRouter();
@@ -27,6 +29,14 @@ const isTranscribing = ref(false);
 const transcriptionProgress = ref(0);
 const currentTranscriptionText = ref('');
 const transcriptionChunks = ref([]);
+
+// New variables for model loading and summarization
+const isModelLoading = ref(false);
+const modelLoadingProgress = ref(0);
+const isSummarizing = ref(false);
+const currentSummaryText = ref('');
+const summaryChunks = ref([]);
+const showSummaryModal = ref(false);
 
 // Audio stream variable for passing to AudioVisualizer
 const audioStream = ref(null);
@@ -242,7 +252,7 @@ const finishRecordingAndProcess = async (audioBlob, duration) => {
         });
 
         // Update the route to the new session ID
-        router.replace(`/app//session/${sessionId}`);
+        router.replace(`/app/session/${sessionId}`);
 
         // Reload the session with new ID
         await loadSession(sessionId);
@@ -283,7 +293,7 @@ const processRecording = async (currentSession, audioBlob) => {
         const transcription = await transcribeAudio(audioArrayBuffer, {
             onProgress: (progress) => {
                 transcriptionProgress.value = progress.progress;
-                loadingMessage.value = `Loading transcription model: ${Math.round(progress.progress * 100)}%`;
+                loadingMessage.value = `Loading transcription model: ${Math.round(progress.progress)}%`;
             }
         });
         
@@ -310,7 +320,7 @@ const processRecording = async (currentSession, audioBlob) => {
         
         currentSession.transcript = finalTranscript;
         
-        // Send transcript to server for summarization
+        // Send transcript to local model for summarization
         loadingMessage.value = 'Generating summary...';
         const { notes } = await getSummaryFromTranscript(finalTranscript);
         const summary = notes;
@@ -336,16 +346,63 @@ const processRecording = async (currentSession, audioBlob) => {
         loading.value = false;
         isProcessing.value = false;
         isTranscribing.value = false;
+        isSummarizing.value = false;
+        showSummaryModal.value = false;
     }
 };
 
 // Get summary from the transcript (instead of audio)
 const getSummaryFromTranscript = async (transcript) => {
-    // Send just the transcript to server for summarization
-    let result = await serverMethods.session.summarizeTranscript(transcript);
-    if (await checkAndShowHttpError(result))
-        throw new Error("error summarizing");
-    return result.data;
+    try {
+        isModelLoading.value = true;
+        isSummarizing.value = true;
+        modelLoadingProgress.value = 0;
+        currentSummaryText.value = '';
+        summaryChunks.value = [];
+        
+        // Define progress callback for model loading
+        const progress = {
+            onLoadProgress: (progress) => {
+                modelLoadingProgress.value = progress.progress;
+                loadingMessage.value = `Loading summarization model: ${progress.text}`;
+            }
+        };
+        
+        // Start the summarization process
+        const summarization = summarizeTranscript(transcript, progress);
+        
+        // Process summary results as they come
+        let finalSummary = '';
+        loadingMessage.value = 'Generating summary...';
+        
+        // Once model is loaded, show the summary modal
+        showSummaryModal.value = true;
+        
+        for await (const chunk of summarization) {
+            // when u get first chunk, not loading
+            loading.value = false;
+
+            // Accumulate the summary text
+            currentSummaryText.value += chunk;
+            
+            // Add to chunks array for potential future use
+            summaryChunks.value.push(chunk);
+        }
+        
+        finalSummary = currentSummaryText.value;
+        console.log('Final summary:', finalSummary);
+        
+        isModelLoading.value = false;
+        isSummarizing.value = false;
+        
+        return { notes: finalSummary };
+    } catch (err) {
+        console.error('Error generating summary:', err);
+        isModelLoading.value = false;
+        isSummarizing.value = false;
+        showSummaryModal.value = false;
+        throw err;
+    }
 };
 
 // The original getSummary is now only used as fallback
@@ -455,10 +512,8 @@ onBeforeUnmount(() => {
     <div class="session-page">
         <div class="app-container">
             <div v-if="loading" class="loading-overlay">
-                <div class="spinner-border mb-3" role="status">
-                    <span class="visually-hidden">Loading...</span>
-                </div>
-                <div>{{ loadingMessage }}</div>
+                <div class="spinner"></div>
+                <div class="loading-message-container">{{ loadingMessage }}</div>
                 
                 <!-- Transcription progress display -->
                 <div v-if="isTranscribing" class="transcription-progress mt-4">
@@ -478,6 +533,42 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
                 </div>
+                
+                <!-- Model loading progress display -->
+                <div v-if="isModelLoading" class="model-loading-progress mt-4">
+                    <div v-if="modelLoadingProgress < 1" class="progress mb-2" style="width: 80%;">
+                        <div class="progress-bar bg-success" role="progressbar"
+                            :style="{ width: `${modelLoadingProgress * 100}%` }"
+                            :aria-valuenow="modelLoadingProgress * 100" 
+                            aria-valuemin="0" aria-valuemax="100">
+                            {{ Math.round(modelLoadingProgress * 100) }}%
+                        </div>
+                    </div>
+                    <div class="model-info">
+                        <p class="info-text">Loading AI model for note generation. This happens once and will be faster next time.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Summary generation modal -->
+            <div v-if="showSummaryModal && isSummarizing" class="summary-modal-background">
+                <div class="summary-modal-content">
+                    <h3>Generating Session Notes</h3>
+                    <div class="summary-generation-header">
+                        <div class="spinner small-spinner"></div>
+                        <span class="generation-status">AI is analyzing the session and generating notes...</span>
+                    </div>
+                    
+                    <div class="live-summary-container">
+                        <div class="live-summary-content" ref="summaryContent">
+                            <p style="white-space: pre-line">{{ currentSummaryText }}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="summary-modal-footer">
+                        <p class="info-text">Please wait while the AI analyzes the transcript and generates detailed notes...</p>
+                    </div>
+                </div>
             </div>
 
             <div v-if="showTranscriptModal && session && session.transcript" class="modal-background"
@@ -485,7 +576,7 @@ onBeforeUnmount(() => {
                 <div class="modal-content" @click.stop>
                     <h3>Transcript</h3>
                     <div class="mb-3">{{ session.transcript }}</div>
-                    <button class="btn btn-secondary" @click="showTranscriptModal = false">Close</button>
+                    <button class="secondary-button" @click="showTranscriptModal = false">Close</button>
                 </div>
             </div>
 
@@ -494,119 +585,117 @@ onBeforeUnmount(() => {
                     <h3>Confirm Deletion</h3>
                     <p>Are you sure you want to delete this session? This action cannot be undone.</p>
                     <div class="d-flex justify-content-end gap-2">
-                        <button class="btn btn-secondary" @click="showDeleteConfirm = false">Cancel</button>
-                        <button class="btn btn-danger" @click="deleteSession">Delete</button>
+                        <button class="secondary-button" @click="showDeleteConfirm = false">Cancel</button>
+                        <button class="danger-button" @click="deleteSession">Delete</button>
                     </div>
                 </div>
             </div>
 
             <div class="main-content">
-                <div class="d-flex justify-content-between align-items-center mb-4">
-                    <button class="btn btn-outline-secondary" @click="goBackToDashboard">
+                <div class="header-row">
+                    <button class="secondary-button" @click="goBackToDashboard">
                         <i class="bi bi-arrow-left me-2"></i>Back to Dashboard
                     </button>
-                    <h1 class="h3">Session Details</h1>
+                    <h1>Session Details</h1>
                 </div>
 
-                <div v-if="notFound" class="alert alert-danger">
-                    Session not found. The session may have been deleted or the ID is invalid.
-                    <button class="btn btn-primary mt-2" @click="goBackToDashboard">Return to Dashboard</button>
+                <div v-if="notFound" class="alert-card">
+                    <p>Session not found. The session may have been deleted or the ID is invalid.</p>
+                    <button class="primary-button" @click="goBackToDashboard">Return to Dashboard</button>
                 </div>
 
                 <div v-else-if="session && session.status === 'new'" class="recording-mode">
-                    <div class="text-center mb-4">
-                        <div class="mb-3">
-                            <input type="text" class="form-control" placeholder="Client Name (optional)"
+                    <div class="recording-card">
+                        <div class="client-input">
+                            <input type="text" class="form-input" placeholder="Client Name (optional)"
                                 v-model="clientName">
                         </div>
                         <div class="timer">{{ formattedDuration }}</div>
                         <div class="recording-indicator">● Recording</div>
                         <AudioVisualizer :audio-stream="audioStream" :is-recording="true" />
 
-                        <button class="btn btn-danger btn-lg mt-4" @click="stopRecording">
+                        <button class="danger-button btn-lg" @click="stopRecording">
                             <i class="bi bi-stop-circle me-2"></i>Stop Recording
                         </button>
                     </div>
                 </div>
 
                 <div v-else-if="session" class="session-details">
-                    <div class="card mb-4">
-                        <div class="card-header d-flex justify-content-between align-items-center">
+                    <div class="session-card">
+                        <div class="session-card-header">
                             <span>{{ formattedDate }}</span>
-                            <span class="badge" :class="{
-                                'bg-success': session.status === 'completed',
-                                'bg-warning': session.status === 'processing',
-                                'bg-danger': session.status === 'error',
-                                'bg-primary': session.status === 'recorded'
+                            <span class="status-badge" :class="{
+                                'status-completed': session.status === 'completed',
+                                'status-processing': session.status === 'processing',
+                                'status-error': session.status === 'error',
+                                'status-recorded': session.status === 'recorded'
                             }">
                                 {{ session.status }}
                             </span>
                         </div>
 
-                        <div class="card-body">
+                        <div class="session-card-body">
                             <!-- Client Name Input -->
-                            <div class="mb-3">
-                                <label class="form-label">Client Name</label>
+                            <div class="input-section">
+                                <label class="input-label">Client Name</label>
                                 <div class="input-group">
-                                    <input type="text" class="form-control" placeholder="Client Name"
+                                    <input type="text" class="form-input" placeholder="Client Name"
                                         v-model="clientName">
-                                    <button class="btn btn-outline-primary" @click="updateClientName">Update</button>
+                                    <button class="secondary-button" @click="updateClientName">Update</button>
                                 </div>
                             </div>
 
-                            <p>Duration: {{ formattedDuration }}</p>
+                            <p class="duration-text">Duration: {{ formattedDuration }}</p>
 
-                            <div v-if="session.recording" class="mb-4">
+                            <div v-if="session.recording" class="recording-section">
                                 <h4>Recording</h4>
-                                <div class="d-flex align-items-center">
-                                    <audio v-if="recordingUrl" controls :src="recordingUrl" class="me-3"></audio>
-                                    <span class="badge bg-info">{{ formatFileSize(session.fileSize) }}</span>
+                                <div class="audio-player-container">
+                                    <audio v-if="recordingUrl" controls :src="recordingUrl" class="audio-player"></audio>
+                                    <span class="file-size-badge">{{ formatFileSize(session.fileSize) }}</span>
                                 </div>
 
                                 <!-- Add retry button when recording exists but processing failed -->
                                 <div v-if="session.status === 'error' || (!session.transcript && session.status !== 'processing')"
-                                    class="mt-2">
-                                    <button class="btn btn-warning" @click="retryProcessing" :disabled="isProcessing">
+                                    class="retry-section">
+                                    <button class="warning-button" @click="retryProcessing" :disabled="isProcessing">
                                         <i class="bi bi-arrow-repeat me-1"></i> Retry Transcription & Processing
                                     </button>
-                                    <small class="text-muted d-block mt-1">
+                                    <small class="info-text">
                                         Click to attempt processing this recording again
                                     </small>
                                 </div>
                             </div>
                             
-                            <div class="mb-4">
-                                <button v-if="session.transcript" class="btn btn-outline-secondary"
+                            <div class="transcript-section">
+                                <button v-if="session.transcript" class="secondary-button"
                                     @click="showTranscriptModal = true">
                                     Show Transcript
                                 </button>
-                                <span v-else-if="session.status === 'completed'" class="text-warning">
+                                <span v-else-if="session.status === 'completed'" class="warning-text">
                                     Transcript should be available but couldn't be loaded
-                                    <button class="btn btn-sm btn-warning ms-2" @click="retryProcessing">
+                                    <button class="warning-button small" @click="retryProcessing">
                                         Retry
                                     </button>
                                 </span>
                             </div>
 
-                            <div v-if="session.summary" class="mb-4">
+                            <div v-if="session.summary" class="summary-section">
                                 <h4>Summary</h4>
-                                <div class="card">
-                                    <div class="card-body">
-                                        <p style="white-space: pre-line">{{ session.summary }}</p>
-                                        <button class="btn btn-outline-primary" @click="copyNotes">Copy Notes</button>
-                                    </div>
+                                <div class="summary-card">
+                                    <p style="white-space: pre-line">{{ session.summary }}</p>
+                                    <button class="primary-button" @click="copyNotes">Copy Notes</button>
                                 </div>
                             </div>
-                            <div v-else-if="session.status === 'completed'" class="mb-4 text-warning">
+                            <div v-else-if="session.status === 'completed'" class="warning-text">
                                 Summary should be available but couldn't be loaded
-                                <button class="btn btn-sm btn-warning ms-2" @click="retryProcessing">
+                                <button class="warning-button small" @click="retryProcessing">
                                     Retry
                                 </button>
                             </div>
                         </div>
                     </div>
 
-                    <div v-if="showDebugInfo" class="mt-4 p-3 border rounded bg-light">
+                    <div v-if="showDebugInfo" class="debug-panel">
                         <h5>Debug Information</h5>
                         <div>
                             <p><strong>Session ID:</strong> {{ session.id }}</p>
@@ -619,9 +708,9 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
 
-                    <div class="d-flex justify-content-between align-items-center mt-4">
-                        <button class="btn btn-danger" @click="showDeleteConfirm = true">Delete Session</button>
-                        <button class="btn btn-outline-secondary" @click="toggleDebug">
+                    <div class="action-row">
+                        <button class="danger-button" @click="showDeleteConfirm = true">Delete Session</button>
+                        <button class="secondary-button small" @click="toggleDebug">
                             {{ showDebugInfo ? 'Hide Debug' : 'Show Debug' }}
                         </button>
                     </div>
@@ -635,18 +724,197 @@ onBeforeUnmount(() => {
 @import '../../../scss/variables.module.scss';
 
 .session-page {
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: $text-dark;
+    line-height: 1.6;
+
     .app-container {
         position: relative;
         min-height: 100vh;
-        padding: 1rem;
+        padding: $spacing-sm;
     }
 
     .main-content {
         max-width: 800px;
         margin: 0 auto;
-        padding: 1rem;
+        padding: $spacing-md;
     }
 
+    .loading-message-container {
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: $text-dark;
+        max-width: 100%;
+        min-width: 0;
+        padding: 15px;
+    }
+    
+    h1 {
+        font-size: clamp(1.5rem, 3vw, 2.5rem);
+        font-weight: 700;
+        margin: 0;
+        background: $primary-gradient;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+    }
+    
+    h4 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-top: $spacing-md;
+        margin-bottom: $spacing-sm;
+    }
+    
+    h5 {
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin: 0;
+    }
+
+    // Header row
+    .header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: $spacing-lg;
+    }
+
+    // Button styles
+    .primary-button {
+        display: inline-flex;
+        align-items: center;
+        background: $primary-gradient;
+        color: $white;
+        padding: $spacing-xs $spacing-md;
+        border-radius: $border-radius-md;
+        border: none;
+        font-weight: 600;
+        cursor: pointer;
+        text-decoration: none;
+        transition: transform 0.2s, box-shadow 0.2s;
+        box-shadow: $shadow-sm;
+        
+        &:hover {
+            transform: translateY(-2px);
+            box-shadow: $shadow-md;
+        }
+        
+        &.btn-lg {
+            padding: $spacing-sm $spacing-lg;
+            font-size: 1.1rem;
+        }
+    }
+    
+    .secondary-button {
+        display: inline-flex;
+        align-items: center;
+        background: rgba($primary, 0.1);
+        color: $primary;
+        padding: $spacing-xs $spacing-md;
+        border-radius: $border-radius-md;
+        border: none;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        
+        &:hover {
+            background: rgba($primary, 0.2);
+        }
+        
+        &.small {
+            font-size: 0.9rem;
+            padding: $spacing-xs $spacing-sm;
+        }
+    }
+
+    .danger-button {
+        display: inline-flex;
+        align-items: center;
+        background: linear-gradient(135deg, #ff4b2b, #ff416c);
+        color: $white;
+        padding: $spacing-xs $spacing-md;
+        border-radius: $border-radius-md;
+        border: none;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        
+        &:hover {
+            transform: translateY(-2px);
+            box-shadow: $shadow-md;
+        }
+        
+        &.btn-lg {
+            padding: $spacing-sm $spacing-lg;
+            font-size: 1.1rem;
+        }
+    }
+
+    .warning-button {
+        display: inline-flex;
+        align-items: center;
+        background: rgba(#f59e0b, 0.1);
+        color: #f59e0b;
+        padding: $spacing-xs $spacing-md;
+        border-radius: $border-radius-md;
+        border: none;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        
+        &:hover {
+            background: rgba(#f59e0b, 0.2);
+        }
+        
+        &.small {
+            font-size: 0.9rem;
+            padding: $spacing-xs $spacing-sm;
+            margin-left: $spacing-xs;
+        }
+
+        &:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    }
+
+    // Form elements
+    .form-input {
+        width: 100%;
+        padding: $spacing-sm;
+        border: 1px solid #ddd;
+        border-radius: $border-radius-md;
+        background: $white;
+        outline: none;
+        transition: all 0.2s;
+        
+        &:focus {
+            border-color: $primary;
+            box-shadow: 0 0 0 2px rgba($primary, 0.2);
+        }
+    }
+
+    .input-section {
+        margin-bottom: $spacing-md;
+    }
+
+    .input-label {
+        display: block;
+        margin-bottom: $spacing-xs;
+        font-weight: 500;
+    }
+
+    .input-group {
+        display: flex;
+        gap: $spacing-xs;
+        
+        .form-input {
+            flex: 1;
+        }
+    }
+
+    // Loading overlay
     .loading-overlay {
         display: flex;
         align-items: center;
@@ -661,6 +929,22 @@ onBeforeUnmount(() => {
         z-index: 2000;
     }
 
+    // Spinner
+    .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid rgba($primary, 0.3);
+        border-radius: 50%;
+        border-top-color: $primary;
+        animation: spin 1s linear infinite;
+        margin-bottom: $spacing-md;
+    }
+    
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    // Modal styles
     .modal-background {
         position: fixed;
         top: 0;
@@ -676,56 +960,213 @@ onBeforeUnmount(() => {
 
     .modal-content {
         background-color: white;
-        border-radius: 5px;
-        padding: 1rem;
+        border-radius: $border-radius-lg;
+        padding: $spacing-lg;
         width: 90%;
         max-width: 600px;
         max-height: 80vh;
         overflow-y: auto;
-        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        box-shadow: $shadow-lg;
     }
 
+    // Alert card
+    .alert-card {
+        background-color: rgba(#ef4444, 0.1);
+        border-left: 4px solid #ef4444;
+        padding: $spacing-md;
+        border-radius: $border-radius-md;
+        margin-bottom: $spacing-lg;
+    }
+
+    // Recording mode
     .recording-mode {
-        margin: 2rem 0;
+        margin: $spacing-xl 0;
+    }
+
+    .recording-card {
+        background: $white;
+        border-radius: $border-radius-lg;
+        padding: $spacing-lg;
+        box-shadow: $shadow-card;
+        text-align: center;
+        
+        .client-input {
+            margin-bottom: $spacing-md;
+        }
     }
 
     .timer {
-        font-size: 2rem;
+        font-size: 2.5rem;
         font-family: monospace;
         text-align: center;
-        margin: 1rem 0;
+        margin: $spacing-md 0;
+        color: $primary;
     }
 
     .recording-indicator {
-        color: #dc3545;
+        color: #ef4444;
         font-weight: bold;
         animation: pulse 1.5s infinite;
+        margin-bottom: $spacing-md;
+        font-size: 1.2rem;
     }
 
     @keyframes pulse {
-        0% {
-            opacity: 1;
-        }
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+    }
 
-        50% {
-            opacity: 0.5;
-        }
+    // Session details
+    .session-card {
+        background: $white;
+        border-radius: $border-radius-lg;
+        box-shadow: $shadow-card;
+        margin-bottom: $spacing-lg;
+        overflow: hidden;
+    }
 
-        100% {
-            opacity: 1;
+    .session-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: $spacing-md;
+        background: rgba($primary, 0.05);
+        border-bottom: 1px solid rgba($primary, 0.1);
+    }
+
+    .session-card-body {
+        padding: $spacing-lg;
+    }
+
+    // Status badges
+    .status-badge {
+        font-size: 0.8rem;
+        font-weight: 600;
+        padding: 0.25rem 0.5rem;
+        border-radius: $border-radius-sm;
+        text-transform: uppercase;
+        
+        &.status-completed {
+            background-color: rgba(#10b981, 0.2);
+            color: #10b981;
+        }
+        
+        &.status-processing {
+            background-color: rgba(#f59e0b, 0.2);
+            color: #f59e0b;
+        }
+        
+        &.status-error {
+            background-color: rgba(#ef4444, 0.2);
+            color: #ef4444;
+        }
+        
+        &.status-recorded {
+            background-color: rgba($primary, 0.2);
+            color: $primary;
         }
     }
 
-    /* Responsive audio player */
-    audio {
+    .file-size-badge {
+        display: inline-block;
+        padding: $spacing-xs $spacing-sm;
+        border-radius: $border-radius-sm;
+        background: rgba($primary, 0.1);
+        color: $primary;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+
+    // Audio player
+    .audio-player-container {
+        display: flex;
+        align-items: center;
+        gap: $spacing-md;
+        margin: $spacing-sm 0 $spacing-md;
+    }
+
+    .audio-player {
         width: 100%;
-        max-width: 300px;
+        max-width: 500px;
+        height: 40px;
     }
 
-    // New styles for transcription display
+    // Sections
+    .recording-section, .transcript-section, .summary-section {
+        margin-bottom: $spacing-lg;
+    }
+
+    .retry-section {
+        margin-top: $spacing-sm;
+    }
+
+    .summary-card {
+        background: $background-light;
+        border-radius: $border-radius-md;
+        padding: $spacing-md;
+        border-left: 4px solid $primary;
+        margin-bottom: $spacing-md;
+    }
+
+    // Text styles
+    .duration-text {
+        font-size: 1.1rem;
+        color: $text-dark;
+        margin-bottom: $spacing-md;
+    }
+
+    .warning-text {
+        color: #f59e0b;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+    }
+
+    .info-text {
+        display: block;
+        color: $text-muted;
+        margin-top: $spacing-xs;
+        font-size: 0.9rem;
+    }
+
+    // Debug panel
+    .debug-panel {
+        margin-top: $spacing-xl;
+        padding: $spacing-md;
+        border-radius: $border-radius-md;
+        background: $background-light;
+        box-shadow: $shadow-sm;
+        
+        h5 {
+            margin-bottom: $spacing-sm;
+        }
+    }
+
+    // Action row
+    .action-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: $spacing-lg;
+    }
+
+    // Transcription progress
     .transcription-progress {
         width: 80%;
         max-width: 600px;
+    }
+    
+    .progress {
+        height: 10px;
+        background-color: rgba($primary, 0.1);
+        border-radius: $border-radius-sm;
+        overflow: hidden;
+    }
+    
+    .progress-bar {
+        height: 100%;
+        background: $primary-gradient;
     }
     
     .current-transcription {
@@ -736,37 +1177,155 @@ onBeforeUnmount(() => {
     .transcription-box {
         max-height: 300px;
         overflow-y: auto;
-        padding: 15px;
-        background-color: #f8f9fa;
-        border-radius: 5px;
+        padding: $spacing-md;
+        background-color: $background-light;
+        border-radius: $border-radius-md;
         border: 1px solid #dee2e6;
-        margin-top: 10px;
+        margin-top: $spacing-sm;
         text-align: left;
         font-size: 0.9rem;
         line-height: 1.5;
     }
 
-    /* Mobile optimizations */
-    @media (max-width: 768px) {
-        .modal-content {
-            width: 95%;
-            max-height: 90vh;
+    // Model loading progress
+    .model-loading-progress {
+        width: 80%;
+        max-width: 600px;
+    }
+    
+    .model-info {
+        margin-top: $spacing-sm;
+        text-align: center;
+        
+        .info-text {
+            color: $text-muted;
+            font-size: 0.9rem;
         }
+    }
+    
+    // Summary generation modal
+    .summary-modal-background {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1100;
+    }
+    
+    .summary-modal-content {
+        background-color: white;
+        border-radius: $border-radius-lg;
+        padding: $spacing-lg;
+        width: 90%;
+        max-width: 800px;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: $shadow-lg;
+        
+        h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: $primary;
+            margin-bottom: $spacing-md;
+            text-align: center;
+        }
+    }
+    
+    .summary-generation-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: $spacing-md;
+        padding: $spacing-sm;
+        background: rgba($primary, 0.1);
+        border-radius: $border-radius-md;
+        
+        .generation-status {
+            margin-left: $spacing-sm;
+            font-weight: 500;
+            color: $primary;
+        }
+    }
+    
+    .small-spinner {
+        width: 24px;
+        height: 24px;
+        border-width: 3px;
+    }
+    
+    .live-summary-container {
+        flex: 1;
+        overflow: hidden;
+        position: relative;
+        margin-bottom: $spacing-md;
+        border: 1px solid #eaecef;
+        border-radius: $border-radius-md;
+        background: $background-light;
+    }
+    
+    .live-summary-content {
+        padding: $spacing-md;
+        height: 400px;
+        overflow-y: auto;
+        font-size: 1rem;
+        line-height: 1.6;
+        color: $text-dark;
+        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        
+        p {
+            margin-bottom: $spacing-md;
+        }
+    }
+    
+    .summary-modal-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        
+        .info-text {
+            color: $text-muted;
+            font-size: 0.9rem;
+        }
+    }
+    
+    // Progress bar colors for model loading
+    .progress-bar.bg-success {
+        background: linear-gradient(135deg, #28a745, #20c997);
+    }
 
+    /* Responsive styles */
+    @media (max-width: $breakpoint-md) {
+        .main-content {
+            padding: $spacing-sm;
+        }
+        
+        .header-row {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: $spacing-md;
+        }
+        
         .timer {
-            font-size: 1.5rem;
+            font-size: 2rem;
         }
-
-        .audio-visualizer {
-            height: 60px;
+        
+        .audio-player-container {
+            flex-direction: column;
+            align-items: flex-start;
         }
-
-        h2 {
-            font-size: 1.5rem;
-        }
-
-        h4 {
-            font-size: 1.2rem;
+        
+        .action-row {
+            flex-direction: column;
+            gap: $spacing-md;
+            
+            button {
+                width: 100%;
+            }
         }
     }
 }
