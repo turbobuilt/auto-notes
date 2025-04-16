@@ -565,4 +565,41 @@ export class WebRTCService {
             });
         }
     }
+
+    // Monitor stream changes for recording
+    public onStreamChanged(callback: (stream: MediaStream, type: 'added' | 'removed', connectionId?: string) => void): void {
+        // Register for local stream changes
+        this.on('localStreamChanged', (stream: MediaStream) => {
+            callback(stream, 'added');
+        });
+        
+        // Register for remote stream additions
+        this.on('remoteStreamAdded', (connectionId: string, stream: MediaStream) => {
+            callback(stream, 'added', connectionId);
+        });
+        
+        // Register for remote stream removals
+        this.on('remoteStreamRemoved', (connectionId: string, stream: MediaStream) => {
+            callback(stream, 'removed', connectionId);
+        });
+    }
+    
+    // Get all active streams (local + remote)
+    public getAllStreams(): { stream: MediaStream, connectionId?: string }[] {
+        const streams: { stream: MediaStream, connectionId?: string }[] = [];
+        
+        // Add local stream if available
+        if (this.localStream) {
+            streams.push({ stream: this.localStream });
+        }
+        
+        // Add all remote streams
+        this.peerConnections.forEach((peer, connectionId) => {
+            if (peer.remoteStream && peer.remoteStream.getTracks().length > 0) {
+                streams.push({ stream: peer.remoteStream, connectionId });
+            }
+        });
+        
+        return streams;
+    }
 }

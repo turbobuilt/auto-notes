@@ -1,5 +1,5 @@
 -- Create the user 'autonotes' with password
-CREATE USER autonotes WITH PASSWORD '';
+CREATE USER autonotes WITH PASSWORD 'idinfu48947fgdkfjrughhdbdu4';
 
 -- Create the database
 CREATE DATABASE autonotes;

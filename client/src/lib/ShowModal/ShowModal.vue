@@ -1,7 +1,5 @@
 <script lang="ts">
-import Vue, { createApp, defineComponent } from 'vue';
-import axios from "axios";
-import { title } from 'process';
+import { defineComponent } from 'vue';
 
 export default defineComponent({
     props: ["onClose","title", "component","props","closable"],

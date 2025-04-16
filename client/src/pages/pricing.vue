@@ -140,10 +140,6 @@ import WebsiteFooter from '../components/WebsiteFooter.vue';
               <span class="feature-name">Video conferencing</span>
               <span class="feature-value yes">✓</span>
             </li>
-            <li>
-              <span class="feature-name">Advanced analytics</span>
-              <span class="feature-value yes">✓</span>
-            </li>
           </ul>
         </div>
         <div class="card-footer">

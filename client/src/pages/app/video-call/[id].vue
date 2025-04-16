@@ -4,11 +4,15 @@ import router from '@/router'
 import { serverMethods } from '@/serverMethods';
 import type { VideoCall } from '@/serverTypes/videoCall/VideoCall.model';
 import { store } from '@/store';
-import { onMounted, ref, reactive, computed, onUnmounted } from 'vue'
+import { onMounted, ref, reactive, computed, onUnmounted, watch } from 'vue'
 import { initVideoCallWebSocket, joinVideoCall, sendVideoCallMessage } from '@/lib/videoCallWebSocket';
 import { VideoCallSignaling } from '@/lib/videoCallSignaling';
 import { WebRTCService } from '@/lib/webrtcService';
 import VideoParticipant from '@/components/VideoParticipant.vue';
+import { recorderService } from '@/lib/recorderService';
+import { db } from "@/lib/db";
+import { transcribeAudio } from '@/new_lib/index';
+import { summarizeTranscript } from '@/llm/summarizeTranscript';
 
 console.log("user is", store.user)
 
@@ -34,10 +38,31 @@ const d = reactive({
     connectionTimeout: false, // Flag for connection timeout
 })
 
+// Replace the current remote stream variables with these:
+const allRemoteStreams = ref<Array<{ id: string, stream: MediaStream }>>([]);
+const selectedStreamId = ref<string | null>(null);
+
+// Computed properties to derive views
+const selectedRemoteStream = computed(() => 
+  allRemoteStreams.value.find(s => s.id === selectedStreamId.value) || null
+);
+
+const sidebarStreams = computed(() => 
+  allRemoteStreams.value.filter(s => s.id !== selectedStreamId.value)
+);
+
+// Simplify getTotalActiveParticipants
+function getTotalActiveParticipants() {
+  return 1 + allRemoteStreams.value.length; // 1 local + all remote
+}
+
+// Simplified function to select a stream
+function selectRemoteStream(streamData: { id: string, stream: MediaStream }) {
+  selectedStreamId.value = streamData.id;
+}
+
 // Define the missing reactive variables
-const remoteStreams = ref<Array<{ id: string, stream: MediaStream }>>([]);
-const selectedRemoteStream = ref<{ id: string, stream: MediaStream } | null>(null);
-const showLocalVideoInCenter = computed(() => remoteStreams.value.length === 0 && !selectedRemoteStream.value);
+const showLocalVideoInCenter = computed(() => allRemoteStreams.value.length === 0 && !selectedRemoteStream.value);
 const shareUrl = computed(() => `${window.location.origin}/app/video-call/${d.videoCall?.id}`);
 
 // Track connection statuses
@@ -60,27 +85,17 @@ const routeId = computed(() => (router.currentRoute?.value?.params as any)?.id a
 function handleRemoteStreamAdded(connectionId: string, stream: MediaStream) {
     console.log(`Remote stream added from ${connectionId}`);
     
-    // Check if this stream is already in our list
-    const existingIndex = remoteStreams.value.findIndex(s => s.id === connectionId);
-    
+    const existingIndex = allRemoteStreams.value.findIndex(s => s.id === connectionId);
     if (existingIndex >= 0) {
-        // Replace the existing stream
-        remoteStreams.value[existingIndex] = { id: connectionId, stream };
+        allRemoteStreams.value[existingIndex] = { id: connectionId, stream };
     } else {
-        // Add the new stream
-        remoteStreams.value.push({ id: connectionId, stream });
-        
-        // Auto-select the first remote stream we receive if nothing is currently selected
-        // This ensures the remote stream is displayed in the main view automatically
-        if (!selectedRemoteStream.value && remoteStreams.value.length === 1) {
-            selectRemoteStream(remoteStreams.value[0]);
+        allRemoteStreams.value.push({ id: connectionId, stream });
+        if (selectedStreamId.value === null && allRemoteStreams.value.length === 1) {
+            selectedStreamId.value = connectionId;
         }
     }
     
-    // Update remote connections flag
-    d.hasRemoteConnections = remoteStreams.value.length > 0 || !!selectedRemoteStream.value;
-    
-    // Log the event
+    d.hasRemoteConnections = allRemoteStreams.value.length > 0;
     d.events.push({
         type: 'stream',
         data: { connectionId, action: 'added' },
@@ -91,33 +106,261 @@ function handleRemoteStreamAdded(connectionId: string, stream: MediaStream) {
 function handleConnectionStatusChanged(connectionId: string, status: 'active' | 'stale' | 'dead') {
     console.log(`Connection status changed for ${connectionId}: ${status}`);
     
-    // Update status in our reactive map
     connectionStatuses.set(connectionId, status);
-    
-    // If the connection is dead, remove it from our streams
     if (status === 'dead') {
-        // Check if it's the selected stream
-        if (selectedRemoteStream.value && selectedRemoteStream.value.id === connectionId) {
-            selectedRemoteStream.value = null;
+        if (selectedStreamId.value === connectionId) {
+            selectedStreamId.value = null;
         }
-        
-        // Remove from remote streams list
-        const index = remoteStreams.value.findIndex(s => s.id === connectionId);
+        const index = allRemoteStreams.value.findIndex(s => s.id === connectionId);
         if (index >= 0) {
-            remoteStreams.value.splice(index, 1);
+            allRemoteStreams.value.splice(index, 1);
         }
-        
-        // Update connection flags
-        d.hasRemoteConnections = remoteStreams.value.length > 0 || !!selectedRemoteStream.value;
+        d.hasRemoteConnections = allRemoteStreams.value.length > 0;
     }
     
-    // Log the event
     d.events.push({
         type: 'connection',
         data: { connectionId, status },
         time: new Date()
     });
 }
+
+// New variables for recording
+const isRecording = ref(false);
+const recordingTime = ref(0);
+const showSavingModal = ref(false);
+const showRecordingIndicator = ref(false);
+const clientName = ref('');
+const isTranscribing = ref(false);
+const transcriptionProgress = ref(0);
+const isSummarizing = ref(false);
+const currentTranscriptionText = ref('');
+const currentSummaryText = ref('');
+const showTranscriptModal = ref(false);
+const showSummaryModal = ref(false);
+
+// Start recording the audio from the call
+async function startRecording() {
+  try {
+    if (isRecording.value) return;
+    
+    console.log("Starting to record call audio...");
+    
+    // Create the audio mixer for combining streams
+    const audioMixer = recorderService.createAudioMixer();
+    
+    // Add local stream if available
+    if (localStream.value && localStream.value.getAudioTracks().length > 0) {
+      recorderService.addStreamToRecording(localStream.value, 'local');
+    }
+    
+    // Add all remote streams
+    allRemoteStreams.value.forEach(streamData => {
+      if (streamData.stream && streamData.stream.getAudioTracks().length > 0) {
+        recorderService.addStreamToRecording(streamData.stream, streamData.id);
+      }
+    });
+    
+    // Check if we have any streams to record
+    if (recorderService.getRecordingStreamCount() === 0) {
+      alert("No audio streams available to record");
+      return;
+    }
+    
+    // Start recording with all the mixed streams
+    await recorderService.startMultiStreamRecording({
+      onTimeUpdate: (seconds) => {
+        recordingTime.value = seconds;
+      },
+      onRecordingComplete: async (audioBlob, duration) => {
+        await saveRecording(audioBlob, duration);
+      }
+    });
+    
+    isRecording.value = true;
+    showRecordingIndicator.value = true;
+    
+    // Hide the indicator after 3 seconds
+    setTimeout(() => {
+      showRecordingIndicator.value = false;
+    }, 3000);
+    
+  } catch (error) {
+    console.error("Error starting recording:", error);
+    alert(`Failed to start recording: ${error.message}`);
+  }
+}
+
+// Stop the current recording
+function stopRecording() {
+  if (!isRecording.value) return;
+  
+  recorderService.stopRecording();
+  isRecording.value = false;
+  showSavingModal.value = true;
+}
+
+// Save the recording to the database and process it
+async function saveRecording(audioBlob: Blob, duration: number) {
+  try {
+    console.log("Saving recording, duration:", duration);
+    
+    // Create new session
+    const sessionId = await db.sessions.add({
+      date: Date.now(),
+      duration: duration,
+      status: 'recorded',
+      clientName: clientName.value || `Video Call: ${d.videoCall.id}`,
+      videoCallId: d.videoCall.id
+    });
+
+    // Convert blob to ArrayBuffer for storage
+    const arrayBuffer = await recorderService.blobToArrayBuffer(audioBlob);
+
+    // Store recording with ArrayBuffer and original MIME type
+    await db.recordings.add({
+      sessionId,
+      blob: null,
+      arrayBuffer: arrayBuffer,
+      mimeType: audioBlob.type
+    });
+    
+    showSavingModal.value = false;
+    
+    // Ask user if they want to process the recording now
+    if (confirm("Recording saved. Process it now for transcript and summary?")) {
+      await processRecording(sessionId, audioBlob);
+    } else {
+      alert(`Recording saved. You can process it later from the Dashboard.`);
+    }
+    
+  } catch (error) {
+    console.error("Error saving recording:", error);
+    alert(`Error saving recording: ${error.message}`);
+    showSavingModal.value = false;
+  }
+}
+
+// Process the recording (similar to session page logic)
+async function processRecording(sessionId: number, audioBlob: Blob) {
+  try {
+    showTranscriptModal.value = true;
+    isTranscribing.value = true;
+    transcriptionProgress.value = 0;
+    currentTranscriptionText.value = '';
+    
+    // Update session status
+    await db.sessions.update(sessionId, { status: 'processing' });
+    
+    // Convert blob to ArrayBuffer for transcription
+    const audioArrayBuffer = await blobToArrayBuffer(audioBlob);
+    
+    // Start the transcription process
+    const transcription = await transcribeAudio(audioArrayBuffer, {
+      onProgress: (progress) => {
+        transcriptionProgress.value = progress.progress;
+      }
+    });
+    
+    // Process transcription results as they come
+    let finalTranscript = '';
+    
+    for await (const result of transcription) {
+      currentTranscriptionText.value = result.text;
+      if (result.isComplete) {
+        finalTranscript = result.text;
+      }
+    }
+    
+    console.log('Final transcript:', finalTranscript);
+    isTranscribing.value = false;
+    
+    // Store transcript in database
+    await db.transcripts.add({
+      sessionId: sessionId,
+      text: finalTranscript
+    });
+    
+    // Ask user if they want to generate a summary
+    showTranscriptModal.value = false;
+    const shouldSummarize = confirm("Transcription complete. Generate AI summary?");
+    
+    if (shouldSummarize) {
+      // Send transcript to local model for summarization
+      showSummaryModal.value = true;
+      isSummarizing.value = true;
+      currentSummaryText.value = '';
+      
+      const { notes } = await getSummaryFromTranscript(finalTranscript);
+      const summary = notes;
+      
+      // Store summary
+      await db.summaries.add({
+        sessionId: sessionId,
+        text: summary
+      });
+      
+      // Update session status
+      await db.sessions.update(sessionId, { status: 'completed' });
+      
+      isSummarizing.value = false;
+      showSummaryModal.value = false;
+      
+      // Redirect to the session page to view the results
+      router.push(`/app/session/${sessionId}`);
+    } else {
+      // Just mark as completed
+      await db.sessions.update(sessionId, { status: 'completed' });
+      alert(`Processing complete. You can view the results from the Dashboard.`);
+    }
+    
+  } catch (error) {
+    console.error("Error processing recording:", error);
+    alert(`Error processing recording: ${error.message}`);
+    
+    await db.sessions.update(sessionId, { status: 'error' });
+  } finally {
+    isTranscribing.value = false;
+    isSummarizing.value = false;
+    showTranscriptModal.value = false;
+    showSummaryModal.value = false;
+  }
+}
+
+// Helper functions
+const blobToArrayBuffer = (blob: Blob): Promise<ArrayBuffer> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+};
+
+// Get summary from the transcript
+const getSummaryFromTranscript = async (transcript: string) => {
+  try {
+    const summarization = summarizeTranscript(transcript, {
+      onLoadProgress: (progress) => {
+        console.log(`Loading summarization model: ${progress.text}`);
+      }
+    });
+    
+    // Process summary results as they come
+    let finalSummary = '';
+    
+    for await (const chunk of summarization) {
+      currentSummaryText.value += chunk;
+    }
+    
+    finalSummary = currentSummaryText.value;
+    return { notes: finalSummary };
+    
+  } catch (err) {
+    console.error('Error generating summary:', err);
+    throw err;
+  }
+};
 
 // Modified onMounted to separate media initialization and connection setup
 onMounted(async () => {
@@ -246,7 +489,7 @@ onMounted(async () => {
                     for (const conn of connections) {
                         // Add any missing streams
                         if (conn.remoteStream &&
-                            !remoteStreams.value.some(s => s.id === conn.connectionId)) {
+                            !allRemoteStreams.value.some(s => s.id === conn.connectionId)) {
                             handleRemoteStreamAdded(conn.connectionId, conn.remoteStream);
                         }
                     }
@@ -307,28 +550,28 @@ onUnmounted(() => {
         rtcService.closeAllConnections();
         rtcService = null;
     }
-})
 
-// Function to select a remote stream as the main view
-function selectRemoteStream(streamData: { id: string, stream: MediaStream }) {
-    // If we have a currently selected stream and it's not the one being selected,
-    // we need to swap them
-    if (selectedRemoteStream.value && selectedRemoteStream.value.id !== streamData.id) {
-        // Add current selected stream back to the sidebar (if it's not already there)
-        if (!remoteStreams.value.some(s => s.id === selectedRemoteStream.value!.id)) {
-            remoteStreams.value.push(selectedRemoteStream.value);
-        }
+    // Add recording cleanup
+    if (isRecording.value) {
+        recorderService.stopRecording();
     }
+    recorderService.cleanupMultiStreamRecording();
+});
 
-    // Set the new selected stream
-    selectedRemoteStream.value = streamData;
-
-    // Remove the selected stream from the sidebar list
-    const index = remoteStreams.value.findIndex(s => s.id === streamData.id);
-    if (index >= 0) {
-        remoteStreams.value.splice(index, 1);
-    }
+// Monitor audio streams to update recording
+function updateRecordingStreams() {
+  if (!isRecording.value) return;
+  
+  // Check for any new remote streams and add them to the recording
+  allRemoteStreams.value.forEach(streamData => {
+    recorderService.addStreamToRecording(streamData.stream, streamData.id);
+  });
 }
+
+// Watch for changes in remote streams to update recording
+watch(allRemoteStreams, () => {
+  updateRecordingStreams();
+}, { deep: true });
 
 // Track if controls are visible
 const controlsVisible = ref(false);
@@ -460,10 +703,6 @@ async function initializeLocalMedia() {
 function reload() {
     window.location.reload()
 }
-// Helper function to count total active participants
-function getTotalActiveParticipants() {
-    return 1 + remoteStreams.value.length;
-}
 </script>
 
 <template>
@@ -548,15 +787,18 @@ function getTotalActiveParticipants() {
                                 :class="{ 'control-active': isScreenSharing }">
                                 {{ isScreenSharing ? 'Stop Sharing' : 'Share Screen' }}
                             </button>
+                            <button @click="isRecording ? stopRecording() : startRecording()"
+                                :class="{ 'record-active': isRecording }">
+                                {{ isRecording ? 'Stop Recording' : 'Record Call' }}
+                            </button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Sidebar for additional videos - only show with more than 2 participants -->
                 <div v-if="getTotalActiveParticipants() > 2" class="video-sidebar">
-                    {{ getTotalActiveParticipants() }}
                     <!-- Map over remote streams array to display each one -->
-                    <div v-for="streamData in remoteStreams" :key="streamData.id" class="video-thumbnail">
+                    <div v-for="streamData in sidebarStreams" :key="streamData.id" class="video-thumbnail">
                         <VideoParticipant :stream="streamData.stream" :connection-id="streamData.id"
                             :connection-status="connectionStatuses.get(streamData.id)" size="sidebar"
                             @click="selectRemoteStream(streamData)" />
@@ -574,8 +816,8 @@ function getTotalActiveParticipants() {
                         <span v-if="d.remoteConnectionIds.includes(conn)" class="connected-badge">Connected</span>
                     </li>
                 </ul>
-                <p v-if="remoteStreams.length > 0" class="success-message">
-                    {{ remoteStreams.length + (selectedRemoteStream ? 1 : 0) }} remote stream(s) connected
+                <p v-if="allRemoteStreams.length > 0" class="success-message">
+                    {{ allRemoteStreams.length + (selectedRemoteStream ? 1 : 0) }} remote stream(s) connected
                 </p>
                 
                 <!-- Show media status -->
@@ -594,6 +836,78 @@ function getTotalActiveParticipants() {
                     <pre class="event-data">{{ JSON.stringify(event.data, null, 2) }}</pre>
                 </div>
             </div>
+        </div>
+
+        <!-- Recording indicator -->
+        <div v-if="showRecordingIndicator || isRecording" class="recording-indicator" :class="{ 'fade-out': !showRecordingIndicator && isRecording }">
+            <div class="recording-dot"></div>
+            <span>Recording {{ recordingTime }}s</span>
+        </div>
+        
+        <!-- Saving modal -->
+        <div v-if="showSavingModal" class="modal-background">
+            <div class="modal-content">
+                <h3>Saving Recording</h3>
+                <div class="spinner"></div>
+                <p>Please wait while we save your recording...</p>
+            </div>
+        </div>
+        
+        <!-- Transcription modal -->
+        <div v-if="showTranscriptModal" class="modal-background">
+            <div class="modal-content">
+                <h3>Processing Recording</h3>
+                
+                <div v-if="isTranscribing" class="processing-info">
+                    <div class="spinner"></div>
+                    <p>Transcribing audio...</p>
+                    
+                    <div v-if="transcriptionProgress < 1" class="progress mb-2" style="width: 100%;">
+                        <div class="progress-bar" role="progressbar"
+                            :style="{ width: `${transcriptionProgress * 100}%` }"
+                            :aria-valuenow="transcriptionProgress * 100" 
+                            aria-valuemin="0" aria-valuemax="100">
+                            {{ Math.round(transcriptionProgress * 100) }}%
+                        </div>
+                    </div>
+                    
+                    <div v-if="currentTranscriptionText" class="current-transcription mt-3">
+                        <h5>Live Transcription:</h5>
+                        <div class="transcription-box">
+                            <p style="white-space: pre-line">{{ currentTranscriptionText }}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Summary modal -->
+        <div v-if="showSummaryModal" class="modal-background">
+            <div class="modal-content">
+                <h3>Generating Summary</h3>
+                
+                <div v-if="isSummarizing" class="processing-info">
+                    <div class="spinner"></div>
+                    <p>Creating AI summary from transcript...</p>
+                    
+                    <div v-if="currentSummaryText" class="current-summary mt-3">
+                        <h5>Summary:</h5>
+                        <div class="summary-box">
+                            <p style="white-space: pre-line">{{ currentSummaryText }}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Client name input for recording -->
+        <div v-if="isRecording" class="client-name-input">
+            <input
+                type="text"
+                v-model="clientName"
+                placeholder="Enter client name for this recording"
+                @blur="updateClientName"
+            />
         </div>
     </div>
 </template>
@@ -692,5 +1006,136 @@ function getTotalActiveParticipants() {
     to { opacity: 1; }
 }
 
-/* ...existing code... */
+/* Recording controls and indicators */
+.record-active {
+  background-color: #ff4b4b !important;
+  box-shadow: 0 0 8px rgba(255, 75, 75, 0.8);
+  animation: pulse-record 2s infinite;
+}
+
+@keyframes pulse-record {
+  0% { box-shadow: 0 0 0 0 rgba(255, 75, 75, 0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(255, 75, 75, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 75, 75, 0); }
+}
+
+.recording-indicator {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 1100;
+  transition: opacity 0.5s ease;
+}
+
+.fade-out {
+  opacity: 0.6;
+}
+
+.recording-dot {
+  width: 12px;
+  height: 12px;
+  background-color: #ff4b4b;
+  border-radius: 50%;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+.client-name-input {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: 90%;
+  max-width: 400px;
+}
+
+.client-name-input input {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+/* Modal styles */
+.modal-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.modal-content {
+  background-color: white;
+  border-radius: 8px;
+  padding: 20px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+.processing-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(0, 0, 0, 0.1);
+  border-radius: 50%;
+  border-top-color: #0066cc;
+  animation: spin 1s linear infinite;
+  margin: 20px;
+}
+
+.transcription-box, .summary-box {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Progress bar */
+.progress {
+  height: 10px;
+  background-color: #eee;
+  border-radius: 5px;
+  overflow: hidden;
+  margin: 10px 0;
+}
+
+.progress-bar {
+  height: 100%;
+  background-color: #0066cc;
+  transition: width 0.3s ease;
+}
 </style>

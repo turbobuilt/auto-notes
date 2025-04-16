@@ -1,6 +1,5 @@
 <script lang="ts">
-import Vue, { defineComponent } from 'vue';
-import axios from "axios";
+import { defineComponent } from 'vue';
 
 export default defineComponent({
     props: ["title", "content","close", "label"],

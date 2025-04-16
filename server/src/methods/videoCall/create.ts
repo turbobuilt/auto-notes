@@ -10,6 +10,7 @@ export default route(async function (params, connections: string[]) {
     // Create new video call
     let videoCall = new VideoCall();
     videoCall.connections = connections;
+    videoCall.creator = params.user.id;
     await db.insert(videoCall);
     
     // Initialize the manager with these connections

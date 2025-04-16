@@ -21,6 +21,11 @@ export class RecorderService {
   private audioProcessor: ScriptProcessorNode | null = null;
   private audioContext: AudioContext | null = null;
   
+  // Multi-stream recording support
+  private audioDestination: MediaStreamAudioDestinationNode | null = null;
+  private recordingStreams: Map<string, MediaStream> = new Map();
+  private audioContextWorklet: AudioContext | null = null;
+  
   constructor() {
     this.isSafariBrowser = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
     // For testing/debugging:
@@ -303,6 +308,150 @@ export class RecorderService {
     if (options.onRecordingComplete) {
       options.onRecordingComplete(mp3Blob, this.recordingTime);
     }
+  }
+
+  // ---- New methods for multi-stream recording ----
+  
+  // Initialize audio context for multi-stream recording
+  private initializeAudioContext(): AudioContext {
+    if (!this.audioContextWorklet) {
+      this.audioContextWorklet = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 44100 });
+    }
+    return this.audioContextWorklet;
+  }
+  
+  // Create a mixed audio destination for multiple streams
+  public createAudioMixer(): MediaStreamAudioDestinationNode {
+    const audioContext = this.initializeAudioContext();
+    if (!this.audioDestination) {
+      this.audioDestination = audioContext.createMediaStreamDestination();
+    }
+    return this.audioDestination;
+  }
+  
+  // Add a stream to be recorded, with optional identifier
+  public addStreamToRecording(stream: MediaStream, id: string): void {
+    if (!stream) return;
+    
+    // Store reference to stream
+    this.recordingStreams.set(id, stream);
+    
+    // Create audio context if not exists
+    const audioContext = this.initializeAudioContext();
+    
+    // Create destination if not exists
+    if (!this.audioDestination) {
+      this.audioDestination = audioContext.createMediaStreamDestination();
+    }
+    
+    // Only connect audio tracks
+    stream.getAudioTracks().forEach(track => {
+      if (track.enabled && track.readyState === 'live') {
+        try {
+          // Create source from the audio track
+          const source = audioContext.createMediaStreamSource(
+            new MediaStream([track])
+          );
+          // Connect to the destination for mixing
+          source.connect(this.audioDestination);
+          console.log(`Added audio track from stream ${id} to recording mixer`);
+        } catch (e) {
+          console.error(`Error adding stream ${id} to recording:`, e);
+        }
+      }
+    });
+  }
+  
+  // Remove a stream from recording
+  public removeStreamFromRecording(id: string): void {
+    this.recordingStreams.delete(id);
+    
+    // Note: We can't disconnect individual sources easily with Web Audio API
+    // For simplicity, we'll leave connections in place and just stop tracking the stream
+    console.log(`Removed stream ${id} from recording tracking`);
+    
+    // If we're recording and no streams are left, stop recording
+    if (this.isRecording && this.recordingStreams.size === 0) {
+      this.stopRecording();
+    }
+  }
+  
+  // Start recording mixed audio streams
+  public async startMultiStreamRecording(options: RecordingOptions = {}): Promise<void> {
+    if (this.isRecording) {
+      return;
+    }
+    
+    try {
+      // Make sure we have audio context and destination set up
+      if (!this.audioDestination) {
+        this.createAudioMixer();
+      }
+      
+      // Check if we have any streams to record
+      if (!this.audioDestination || !this.audioDestination.stream || 
+          !this.audioDestination.stream.getAudioTracks().length) {
+        throw new Error("No audio tracks available to record");
+      }
+      
+      // Use the mixed stream for recording
+      this.audioStream = this.audioDestination.stream;
+      
+      // Now proceed with recording as normal
+      if (this.isSafariBrowser) {
+        // Safari path - use lamejs to encode to MP3
+        await this.startSafariRecording(options);
+      } else {
+        // Standard browsers path - use MediaRecorder
+        await this.startStandardRecording(options);
+      }
+
+      // Start timer
+      this.isRecording = true;
+      this.recordingTime = 0;
+      this.timerInterval = window.setInterval(() => {
+        this.recordingTime++;
+
+        if (options.onTimeUpdate) {
+          options.onTimeUpdate(this.recordingTime);
+        }
+
+        // Stop after 1 hour and 15 minutes (4500 seconds)
+        if (this.recordingTime >= 4500) {
+          this.stopRecording(options);
+        }
+      }, 1000);
+      
+      console.log('Multi-stream recording started');
+    } catch (err) {
+      console.error("Multi-stream recording error:", err);
+      throw err;
+    }
+  }
+  
+  // Get the number of active recording streams
+  public getRecordingStreamCount(): number {
+    return this.recordingStreams.size;
+  }
+  
+  // Clean up all recording resources
+  public cleanupMultiStreamRecording(): void {
+    // Stop recording if active
+    if (this.isRecording) {
+      this.stopRecording();
+    }
+    
+    // Clear stream references
+    this.recordingStreams.clear();
+    
+    // Close audio context
+    if (this.audioContextWorklet) {
+      this.audioContextWorklet.close().catch(console.error);
+      this.audioContextWorklet = null;
+    }
+    
+    // Clear destination
+    this.audioDestination = null;
   }
 }
 
