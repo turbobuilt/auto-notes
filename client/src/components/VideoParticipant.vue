@@ -76,7 +76,7 @@ watch(() => props.stream, (newStream) => {
     <!-- Connection overlay for stale/dead connections -->
     <div v-if="connectionStatus === 'stale' || connectionStatus === 'dead'" class="connection-overlay">
       <div class="spinner"></div>
-      <div>
+      <div class="connection-message">
         {{ connectionStatus === 'stale' ? 'Connection unstable...' : 'Connection lost. Reconnecting...' }}
       </div>
     </div>
@@ -95,6 +95,10 @@ watch(() => props.stream, (newStream) => {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+.connection-message {
+  padding: 10px;
+  text-align: center;
 }
 
 /* Sizing variants */

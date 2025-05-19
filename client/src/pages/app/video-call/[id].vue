@@ -108,14 +108,14 @@ function handleConnectionStatusChanged(connectionId: string, status: 'active' | 
     
     connectionStatuses.set(connectionId, status);
     if (status === 'dead') {
-        if (selectedStreamId.value === connectionId) {
-            selectedStreamId.value = null;
-        }
         const index = allRemoteStreams.value.findIndex(s => s.id === connectionId);
-        if (index >= 0) {
+        if (index !== -1) { // Add this check
+            if (selectedStreamId.value === connectionId) {
+                selectedStreamId.value = null;
+            }
             allRemoteStreams.value.splice(index, 1);
+            d.hasRemoteConnections = allRemoteStreams.value.length > 0;
         }
-        d.hasRemoteConnections = allRemoteStreams.value.length > 0;
     }
     
     d.events.push({
