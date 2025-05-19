@@ -22,6 +22,7 @@ export class RouteOptions {
     useFormData?: boolean = false;
     organizationNotRequired?: boolean = false;
     streamResponse?: boolean = false;
+    keepAlive?: boolean = false;
 }
 
 export async function handleMethod(req, res) {
@@ -35,7 +36,7 @@ export async function handleMethod(req, res) {
         let args = [];
 
         let url = new URL(req.url, `http://${req.headers.host}`);
-        
+        console.log("is FormData:", isFormData, "contentType:", contentType);
         if (isFormData) {
             console.log("Parsing FormData request");
             // Parse FormData request
@@ -67,12 +68,10 @@ export async function handleMethod(req, res) {
                 }
             }
         } else if (req.headers['content-type'] === 'application/json') {
-            console.log("Parsing JSON request", req.body);
             // Parse JSON request
             methodName = req.body.method;
             args = req.body.args || [];
         } else {
-            console.log("Parsing query string request");
             methodName = url.searchParams.get("method") as string;
         }
         
@@ -99,7 +98,8 @@ export async function handleMethod(req, res) {
         // Check authentication unless public
         let user = null;
         if (!options.public) {
-            const authToken = req.headers.authorization;
+            const authToken = req.headers.authorization || req.body?.authorization;
+            console.log("Auth token:", authToken);
             if (!authToken) {
                 res.status(401).json({ error: "Authentication required" });
                 return;

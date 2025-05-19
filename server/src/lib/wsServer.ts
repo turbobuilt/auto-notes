@@ -77,7 +77,6 @@ export function setupWebSocketServer(wss: WebSocketServer) {
         ws.on('message', async (message) => {
             try {
                 const data = JSON.parse(message.toString());
-                console.log("Got message", data)
                 // Handle ping messages to keep connection alive
                 if (data.type === 'ping') {
                     const conn = activeWebSocketConnections.get(connectionId);
@@ -171,9 +170,8 @@ async function handleWebSocketMethod(ws: WebSocket, data: any, userId?: string) 
         };
         
         // Execute method
-        console.log("doing method", data.method, routeParams);
+        console.log("doing method", data.method);
         const result = await handler(routeParams, ...(data.args || []));
-        console.log("result", result);
         // Send result back
         ws.send(JSON.stringify({ 
             id: data.id,

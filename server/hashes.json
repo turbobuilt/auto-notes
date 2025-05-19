@@ -14,9 +14,9 @@
     "/src/methods/session/summarize.ts": "6df928e750702a2319c35ffab04b72c1adf515588bcfe2279dd87da81269fe71",
     "/src/methods/session/session.model.ts": "ad37b50047c8e0d1e8cc1fe7afc64c637a7b7621440efe35040b1831ffbe5196",
     "/src/methods/videoCall/create.ts": "89500c0520183f69f14b4a8a656e3fb87fd7503fcb86957326205e7620de10c3",
-    "/src/methods/videoCall/VideoCall.model.ts": "bea4ab3ec3c5946282dd8b77bd81d8fe1b9b4e08ed8172729660b53d395d2188",
+    "/src/methods/videoCall/VideoCall.model.ts": "222a5b79a3eb1a7d9acd5d3dc22c785fe7349b9d3c40100deb5eb058863a2eea",
     "/src/methods/videoCall/get.ts": "8322757ab364c6f6fe26b64c672244b9fc09bb8d786ea3209dbaff09adbc99dd",
-    "/src/methods/videoCall/message.ts": "12fa3708483f0936252afd7c77961432bc1e30a35f74dafebebf131c8b5e1cbf",
+    "/src/methods/videoCall/message.ts": "9ce2e05121130316fb2272943ad4a4e16fe886c41c1efc17349f61194db98f1f",
     "/src/methods/videoCall/join.ts": "b7c3c3e11b53bf379809e76dc01130d9f8f909dece1caed705917d13d1674fcf",
-    "/src/methods/videoCall/leave.ts": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    "/src/methods/videoCall/leave.ts": "cd9dbded117c3be8167cd84ae8f0cda3e49d5aa0d8556433fabce72ca84d9299"
 }

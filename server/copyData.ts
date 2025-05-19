@@ -162,6 +162,7 @@ function doDirectory(dir = "") {
             let options = declarations[0].getExpression().getArguments()[1];
             let useFormData = options?.getProperties().find(prop => prop.getName() === "useFormData")?.getInitializer()?.getText() === "true";
             let streamResponse = options?.getProperties().find(prop => prop.getName() === "streamResponse")?.getInitializer()?.getText() === "true";
+            let keepAlive = options?.getProperties().find(prop => prop.getName() === "keepAlive")?.getInitializer()?.getText() === "true";
             let outputPath = `../client/src/serverTypes${dir}/${methodName}.ts`;
             if (!existsSync(dirname(outputPath))) {
                 mkdirSync(dirname(outputPath), { recursive: true });
@@ -175,7 +176,8 @@ function doDirectory(dir = "") {
                         `import callMethod from "../${updirs}lib/callMethod";
 
 export default function ${methodName}(${params.map(param => param.getText()).join(", ")}) {
-    return callMethod("${methodIdentifier}", [...arguments]${(useFormData || streamResponse) ? `, { ${useFormData ? 'useFormData: true' : ''}${useFormData && streamResponse ? ', ' : ''}${streamResponse ? 'streamResponse: true' : ''} }` : ''}) as Promise<{ error?: string, data: ${returnTypeText.replace(/Promise<(.+)>/, "$1").replace(/import\\(.+?\\)\\./g, "")} }>;
+    return callMethod("${methodIdentifier}", [...arguments], ${
+        JSON.stringify({ useFormData, streamResponse, keepAlive })}) as Promise<{ error?: string, data: ${returnTypeText.replace(/Promise<(.+)>/, "$1").replace(/import\\(.+?\\)\\./g, "")} }>;
 };`);
                 }
             }, { overwrite: true });

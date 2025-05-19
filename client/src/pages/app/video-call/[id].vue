@@ -200,6 +200,17 @@ function stopRecording() {
   showSavingModal.value = true;
 }
 
+onMounted(() => {
+    window.addEventListener('beforeunload', beforeUnload);
+})
+onBeforeUnmount(() => {
+    window.removeEventListener('beforeunload', beforeUnload);
+})
+function beforeUnload(event: BeforeUnloadEvent) {
+    console.log("before unload");
+    serverMethods.videoCall.leave(d.videoCall?.id, d.connectionId);
+}
+
 // Save the recording to the database and process it
 async function saveRecording(audioBlob: Blob, duration: number) {
   try {

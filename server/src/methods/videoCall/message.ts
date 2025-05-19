@@ -119,7 +119,6 @@ async function handleSignalingMessage(videoCall: VideoCall, data: any) {
             [targetId],
             { type: 'videoCallSignal', ...data }
         );
-        console.log("target id is", targetId);
         // Remove invalid connection if needed
         if (invalid.length > 0) {
             await removeInvalidConnectionsFromCall(videoCall, invalid);

@@ -2,7 +2,7 @@
 
 
 
-export default async function callMethod(method: string, args: any[], options: { baseUrl?: string, workspaceGuid?: string, useFormData?: boolean, streamResponse?: boolean } = {}): Promise<{ error?: string, data?: { [key: string]: any }, type?: "binary" | "multibinary" }> {
+export default async function callMethod(method: string, args: any[], options: { baseUrl?: string, workspaceGuid?: string, useFormData?: boolean, streamResponse?: boolean, keepAlive?: boolean } = {}): Promise<{ error?: string, data?: { [key: string]: any }, type?: "binary" | "multibinary" }> {
     let headers = {
         "Content-Type": "application/json",
     } as any;
@@ -52,6 +52,7 @@ export default async function callMethod(method: string, args: any[], options: {
                 headers,
                 body: formData,
                 credentials: "same-origin",
+                keepalive: options.keepAlive,
             });
         }
         // if blob or arrayb use content type binary
@@ -62,6 +63,7 @@ export default async function callMethod(method: string, args: any[], options: {
                 headers,
                 body: args[0],
                 credentials: "same-origin",
+                keepalive: options.keepAlive,
             });
         } else {
             response = await fetch(`${baseUrl}?method=` + encodeURIComponent(method), {
@@ -69,6 +71,7 @@ export default async function callMethod(method: string, args: any[], options: {
                 headers,
                 body: JSON.stringify({ method, args, workspaceGuid: options.workspaceGuid }),
                 credentials: "same-origin",
+                keepalive: options.keepAlive,
             });
         }
     } catch (e) {
