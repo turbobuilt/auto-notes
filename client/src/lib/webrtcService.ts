@@ -27,8 +27,8 @@ export class WebRTCService {
     public onConnectionStatusChangedCallback: ((connectionId: string, status: 'active' | 'stale' | 'dead') => void) | null = null;
 
     private connectionMonitorInterval: number | null = null;
-    private readonly STALE_THRESHOLD_MS = 1000; // 5 seconds for stale
-    private readonly DEAD_THRESHOLD_MS = 5000; // 15 seconds for dead
+    private readonly STALE_THRESHOLD_MS = 5000; // 5 seconds for stale
+    private readonly DEAD_THRESHOLD_MS = 10000; // 15 seconds for dead
 
     // Add event system
     private eventListeners: Map<string, Set<EventCallback>> = new Map();
@@ -522,14 +522,14 @@ export class WebRTCService {
             }
             // Check for dead connections (15+ seconds without activity)
             else if (timeSinceActivity >= this.DEAD_THRESHOLD_MS && peer.status === 'stale') {
-                // peer.status = 'dead';
-                // statusChanged = true;
-                // console.log(`Connection ${connectionId} is dead (${timeSinceActivity}ms without activity)`);
+                peer.status = 'dead';
+                statusChanged = true;
+                console.log(`Connection ${connectionId} is dead (${timeSinceActivity}ms without activity)`);
                 
-                // delete connection if dead
-                console.log("Connection is dead, closing connection", connectionId);
-                this.closeConnection(connectionId);
-                return;
+                // // delete connection if dead
+                // console.log("Connection is dead, closing connection", connectionId);
+                // this.closeConnection(connectionId);
+                // return;
             }
 
             // Notify about status changes
