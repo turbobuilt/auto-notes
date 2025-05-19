@@ -207,7 +207,6 @@ onBeforeUnmount(() => {
     window.removeEventListener('beforeunload', beforeUnload);
 })
 function beforeUnload(event: BeforeUnloadEvent) {
-    console.log("before unload");
     serverMethods.videoCall.leave(d.videoCall?.id, d.connectionId);
 }
 
