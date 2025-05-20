@@ -107,14 +107,39 @@ function handleConnectionStatusChanged(connectionId: string, status: 'active' | 
     console.log(`Connection status changed for ${connectionId}: ${status}`);
     
     connectionStatuses.set(connectionId, status);
+    
     if (status === 'dead') {
+        console.log(`Connection ${connectionId} is dead, removing stream`);
+        // Remove the dead stream from allRemoteStreams
         const index = allRemoteStreams.value.findIndex(s => s.id === connectionId);
-        if (index !== -1) { // Add this check
+        if (index !== -1) {
+            console.log(`Removing stream for ${connectionId}`);
+            // If this was the selected stream, select another one
             if (selectedStreamId.value === connectionId) {
-                selectedStreamId.value = null;
+                // Find a new stream to select
+                const remainingStreams = [...allRemoteStreams.value];
+                remainingStreams.splice(index, 1); // Remove the dead stream
+                
+                if (remainingStreams.length > 0) {
+                    // Select the first available stream
+                    selectedStreamId.value = remainingStreams[0].id;
+                } else {
+                    // No other streams available, show local stream
+                    selectedStreamId.value = null;
+                }
             }
+            
+            // Now remove the stream from the array
             allRemoteStreams.value.splice(index, 1);
             d.hasRemoteConnections = allRemoteStreams.value.length > 0;
+            
+            // Also clean up from remoteConnectionIds if present
+            const remoteIdIndex = d.remoteConnectionIds.indexOf(connectionId);
+            if (remoteIdIndex !== -1) {
+                d.remoteConnectionIds.splice(remoteIdIndex, 1);
+            }
+        } else {
+            console.warn(`Stream for ${connectionId} not found in allRemoteStreams`);
         }
     }
     

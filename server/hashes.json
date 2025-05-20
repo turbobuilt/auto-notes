@@ -18,5 +18,5 @@
     "/src/methods/videoCall/get.ts": "8322757ab364c6f6fe26b64c672244b9fc09bb8d786ea3209dbaff09adbc99dd",
     "/src/methods/videoCall/message.ts": "9ce2e05121130316fb2272943ad4a4e16fe886c41c1efc17349f61194db98f1f",
     "/src/methods/videoCall/join.ts": "b7c3c3e11b53bf379809e76dc01130d9f8f909dece1caed705917d13d1674fcf",
-    "/src/methods/videoCall/leave.ts": "db0c09d4fa9e50816ed91aae1c9d9418d6fd9779806e91557be5be1b5e1748cf"
+    "/src/methods/videoCall/leave.ts": "89d4c7ac4f394acf8404fb092bb450e40f7125df32829b2a9d1b44f1c783000d"
 }

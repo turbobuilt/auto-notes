@@ -194,6 +194,12 @@ export class VideoCallSignaling {
         const peerId = data.senderConnectionId || data.connectionId;
         if (peerId) {
           console.log("Participant left:", peerId);
+          
+          // First explicitly emit the connectionStatusChanged event with 'dead' status
+          // This ensures the UI knows to remove this participant
+          this.webrtcService.emit('connectionStatusChanged', peerId, 'dead');
+          
+          // Then close the connection
           this.webrtcService.closeConnection(peerId);
           
           // Add to events log
@@ -210,7 +216,7 @@ export class VideoCallSignaling {
     
     // Listen for general videoCallParticipant events as before
     this.wsService.on('videoCallParticipant', (data: any) => {
-      console.log("Participant event:", data);
+      console.log("Participant event:", data.event, data.connectionId);
       
       // If a participant left, ensure we update our tracking
       if (data.event === 'left' && data.connectionId) {
